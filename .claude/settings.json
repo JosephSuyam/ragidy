@@ -9,7 +9,6 @@
       "Bash(npm test:*)",
       "Bash(npx tsc:*)",
       "Bash(npx vitest:*)",
-      "Bash(npx eslint:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",

@@ -20,7 +20,7 @@ def commands(path: Path) -> tuple[Path, list[list[str]]] | None:
         and FRONTEND in path.parents
         and (FRONTEND / "node_modules").exists()
     ):
-        return FRONTEND, [["npx", "eslint", "--fix", str(path)]]
+        return FRONTEND, [["npm", "run", "--silent", "lint", "--", "--fix", str(path)]]
     return None
 
 
