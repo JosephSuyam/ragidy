@@ -9,7 +9,7 @@ Pipeline: **chunk → embed → index → retrieve → generate**. Single user, 
 - **Orchestration:** LangChain + LangGraph. It handles conversation memory, agent loops, generation, and external tools.
 - **Store:** Postgres + pgvector, for vectors, documents, chat history, and LangGraph checkpoints.
 - **LLM and embeddings:** pluggable through env vars (`LLM_PROVIDER`, `LLM_MODEL`, `EMBED_PROVIDER`, `EMBED_MODEL`). See `.env.example`.
-- **Frontend:** React + TypeScript (Vite), Tailwind CSS, shadcn/ui (`frontend/`)
+- **Frontend:** React + TypeScript (Vite), Tailwind CSS v4, shadcn/ui, oxlint, Vitest (`frontend/`)
 - **CI:** GitHub Actions (`.github/workflows/`). There is no deploy job yet; add one as a `deploy` job in `ci.yml` that runs on `main` after `backend` and `frontend` pass.
 
 The library split is strict. LlamaIndex returns retrieval results as plain data (text, metadata, score), and LangChain consumes them. Never mix the two roles. Details: `docs/architecture.md`.
@@ -29,7 +29,7 @@ backend/tests/   pytest, mirroring app/
 frontend/src/
   components/ui/ shadcn generated components
   features/      upload/, chat/, documents/               (planned)
-  lib/           api.ts (all backend calls), utils.ts
+  lib/           utils.ts; api.ts for all backend calls  (planned)
 scripts/check.py the single quality gate (hooks, /check, and CI all use it)
 ```
 Create a planned folder when its first code arrives, not before.
