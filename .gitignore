@@ -16,9 +16,9 @@ dist/
 .env.*
 !.env.example
 
-# Claude Code: local settings and session handoffs stay on this machine
+# Claude Code: local settings and hook state stay on this machine
 .claude/settings.local.json
-.claude/sessions/
+.claude/.state/
 
 # OS / editors
 .DS_Store

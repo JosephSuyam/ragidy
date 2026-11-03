@@ -2,7 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(python scripts/check.py:*)",
+      "Bash(python infrastructure/scripts/check.py:*)",
+      "Bash(make:*)",
       "Bash(uv run:*)",
       "Bash(uv sync:*)",
       "Bash(npm run:*)",
@@ -29,7 +30,7 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_start.py\"", "timeout": 30 }
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh\"", "timeout": 30 }
         ]
       }
     ],
@@ -37,21 +38,21 @@
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_edit.py\"", "timeout": 60 }
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-check.sh\"", "timeout": 60 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop_gate.py\"", "timeout": 600 }
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/validate-change.sh\"", "timeout": 600 }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_end.py\"", "timeout": 30 }
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh\"", "timeout": 30 }
         ]
       }
     ]
