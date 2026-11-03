@@ -1,5 +1,7 @@
 name: CI
 
+# Fast gate: lint, format, typecheck, unit tests, build. Integration tests live in tests.yml.
+
 on:
   pull_request:
   push:
@@ -9,23 +11,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  backend:
+  api:
     runs-on: ubuntu-latest
-    services:
-      db:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: ragidy
-          POSTGRES_PASSWORD: ragidy
-          POSTGRES_DB: ragidy
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U ragidy"
-          --health-interval 5s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgresql+psycopg://ragidy:ragidy@localhost:5432/ragidy
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,11 +25,12 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
       - run: uv sync --locked
-        working-directory: backend
-      - run: python scripts/check.py --backend
+        working-directory: apps/api
+      - run: python infrastructure/scripts/check.py --api --fast
 
-  frontend:
+  web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,11 +39,68 @@ jobs:
           python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
-        working-directory: frontend
-      - run: python scripts/check.py --frontend
+        working-directory: apps/web
+      - run: python infrastructure/scripts/check.py --web --fast
       - run: npm run build
-        working-directory: frontend
+        working-directory: apps/web
+
+  # Self-annealing: on a red PR, Claude follows .claude/skills/debugging (CI section) and
+  # pushes a fix. Pushes made with GITHUB_TOKEN do not retrigger workflows, so this cannot loop.
+  autofix:
+    needs: [api, web]
+    if: >-
+      failure() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      id-token: write
+    env:
+      HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - if: env.HAS_KEY != 'true'
+        run: echo "ANTHROPIC_API_KEY not set; skipping autofix."
+      - if: env.HAS_KEY == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - id: guard
+        if: env.HAS_KEY == 'true'
+        run: |
+          if git log -1 --format=%s | grep -q '^fix(ci)'; then
+            echo "Last commit is already an autofix; leaving it for a human."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.guard.outputs.run == 'true'
+        uses: astral-sh/setup-uv@v6
+      - if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - if: steps.guard.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            CI run ${{ github.run_id }} failed on branch ${{ github.head_ref }}.
+            Follow the CI section of .claude/skills/debugging/SKILL.md for that run id.
+            Commit as `fix(ci): <subject>` and push to the same branch.
+          claude_args: >-
+            --max-turns 40
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(gh run:*),Bash(python infrastructure/scripts/check.py:*),Bash(uv:*),Bash(npm:*),Bash(npx:*),Bash(git:*)"

@@ -2,7 +2,7 @@
 -
 
 ## How tested
-- [ ] `python scripts/check.py` passes
+- [ ] `python infrastructure/scripts/check.py` passes
 -
 
 ## Risks
