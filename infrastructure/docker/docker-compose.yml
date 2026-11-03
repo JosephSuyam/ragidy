@@ -1,3 +1,5 @@
+name: ragidy
+
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -9,10 +11,38 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ../database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ragidy"]
       interval: 5s
       retries: 10
+
+  # Full stack from the production images: docker compose --profile app up --build
+  api:
+    profiles: [app]
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/api.Dockerfile
+    env_file:
+      - path: ../../apps/api/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    profiles: [app]
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/web.Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
 
 volumes:
   pgdata:
