@@ -1,5 +1,5 @@
 ---
-description: Plan a feature or change: tasks, owners, contracts, acceptance checks
+description: "Plan a feature or change: tasks, owners, contracts, acceptance checks"
 argument-hint: "<feature or change>"
 ---
 

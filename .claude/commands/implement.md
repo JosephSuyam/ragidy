@@ -1,5 +1,5 @@
 ---
-description: Build a feature end to end: delegate, test, review, document, commit, PR
+description: "Build a feature end to end: delegate, test, review, document, commit, PR"
 argument-hint: "<feature or approved plan>"
 ---
 

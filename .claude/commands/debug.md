@@ -1,5 +1,5 @@
 ---
-description: Find and fix a bug, failing test, or red CI run at the root cause
+description: "Find and fix a bug, failing test, or red CI run at the root cause"
 argument-hint: "<symptom> | ci [run-id]"
 ---
 

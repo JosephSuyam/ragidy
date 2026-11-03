@@ -1,5 +1,5 @@
 ---
-description: Review the current branch or a PR for correctness, security, RAG rules, and tests
+description: "Review the current branch or a PR for correctness, security, RAG rules, and tests"
 argument-hint: "[PR number]"
 ---
 

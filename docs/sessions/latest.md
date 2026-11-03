@@ -1,26 +1,35 @@
-# Session summary (2026-11-03)
+# Session summary (2026-11-03 17:00)
 
 ## Goal
-Set up Ragidy's Claude Code dev workflow (no app features yet): CLAUDE.md, agents, hooks, skills, CI, self-annealing, session summaries.
+Restructure the repo into the user's monorepo layout (apps/, packages/, infrastructure/, docs/ tree), moving existing files rather than recreating them, and fill in the new agents, skills, commands, and workflows.
 
 ## Done
-- Workflow scaffold: CLAUDE.md, 5 agents, 7 skills, 4 hooks, scripts/check.py, CI + autofix workflows (b2198fb)
-- Post-edit hook lints frontend through `npm run lint` (oxlint --deny-warnings) (77db366)
-- Frontend scaffold: Vite 8, React 19, TS 7, Tailwind v4, shadcn (radix, nova preset), Vitest smoke test (87aab6e)
-- Hooks verified by hand with piped JSON: post-edit exits 2 on lint errors; stop gate blocks 3 times then gives up; session start and end round-trip
+- Moved backend → apps/api, frontend → apps/web, check.py → infrastructure/scripts, compose → infrastructure/docker, hook logic → .claude/hooks/scripts behind .sh wrappers (a01f700)
+- Renamed and merged the skills and agents. Added 8 agents, 5 skills, and 8 commands (543de01)
+- Added Dockerfiles, DB init SQL, and the Makefile (6cfbfc3)
+- Split CI into ci (with an autofix job), tests, security, deploy-staging, and deploy-production. Added issue templates (ca7c88a)
+- Wrote AGENTS.md (shared rules), CLAUDE.md (Claude-specific), CONTRIBUTING, docs/{api,development,decisions}, ADR 0001
+- `python infrastructure/scripts/check.py` is green, and pip-audit is clean
 
 ## Next steps
-1. Merge `chore/frontend-scaffold` into `main` (no remote yet, so no PR).
-2. When the user is ready: `gh repo create ragidy --private --source . --push`, then add the `ANTHROPIC_API_KEY` secret for ci-autofix.
-3. Start the MVP with `/ship`: provider factory, then ingestion, then retrieval, then the LangGraph agent, then the upload and chat UI.
+1. Merge `refactor/monorepo-layout`, which contains `chore/frontend-scaffold`, into `main`.
+2. When the user is ready: `gh repo create`, push, add the `ANTHROPIC_API_KEY` secret, and create the `staging` and `production` environments (add an approval rule on production).
+3. Pick a hosting target, then replace the placeholder deploy steps in the deploy-*.yml files.
+4. Start the MVP with `/plan`: the provider factory, then ingestion, then retrieval, then the LangGraph workflow, then the upload and chat UI.
 
 ## Decisions
-- LLM and embeddings are pluggable through env vars; the store is Postgres + pgvector; Python FastAPI with uv; single user, no auth; CI only, no deploy yet.
-- Review uses the plugins (/ponytail-review, /security-review). There is no custom reviewer agent.
-- The frontend lints with oxlint (the Vite template default), not ESLint.
-- Runtime self-healing rules are documented in docs/architecture.md and get implemented in the MVP.
+- AGENTS.md holds the tool-agnostic rules, and CLAUDE.md imports it. This avoids duplicating them.
+- Skills hold the procedures. Commands and agents only point to them.
+- ci-autofix.yml was merged into ci.yml as the `autofix` job, so the workflow list matches the requested layout.
+- Production promotes the staging `sha-<sha>` image and never rebuilds.
+- Auth and workspaces are placeholders only; the app is still single user (ADR 0001).
 
 ## Open questions
-- GitHub repo visibility, and when to create it (the user said "not yet").
+- Hosting target for staging and production.
+- The project skill `code-review` shares its name with the built-in `/code-review`. Confirm which one runs, or rename it.
 
-Branch: chore/frontend-scaffold | Uncommitted: 0 | PR: none | CI: not run (no remote)
+## Not verified
+- Docker image builds: the Docker daemon was not running.
+- All GitHub workflows: there is no remote yet.
+
+Branch: refactor/monorepo-layout | PR: none | CI: not run (no remote)

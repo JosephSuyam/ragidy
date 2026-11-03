@@ -6,20 +6,32 @@ Chat with your files and links using Retrieval-Augmented Generation. LlamaIndex 
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
 - Node.js 22.12+ (or 20.19+)
 - Docker, for Postgres + pgvector
+- `make` (optional; every target is a plain command in `Makefile`)
 
 ## Setup
 ```bash
-cp .env.example backend/.env           # then fill in the API keys
-docker compose up -d db
-cd backend && uv sync && uv run fastapi dev app/main.py
-cd frontend && npm install && npm run dev
+cp .env.example apps/api/.env   # then fill in the API keys
+make install
+make db
+make api                        # http://localhost:8000/health
+make web                        # http://localhost:5173
 ```
 
 ## Quality gate
 ```bash
-python scripts/check.py            # everything
-python scripts/check.py --backend  # or --frontend, --fast
+make check   # lint, format, typecheck, all tests (needs `make db`)
+make fast    # same, without integration tests
 ```
 
-## Development workflow
-This repo is set up for Claude Code. See `CLAUDE.md` for the agents, skills (`/ship`, `/check`, `/commit`, `/pr`, `/fix-ci`, `/lesson`, `/handoff`), and the self-annealing hooks. Architecture: `docs/architecture.md`.
+## Repository layout
+- `apps/api`: FastAPI service (RAG in `app/rag`, agents in `app/agents`)
+- `apps/web`: React app
+- `packages/shared-types`: TypeScript types shared with the API
+- `infrastructure`: Dockerfiles, compose, DB init, the gate script
+- `tests`: cross-app integration, e2e, and fixtures
+- `docs`: architecture, API, development guide, ADRs, session summaries
+
+## More
+- Contributing: `CONTRIBUTING.md`
+- Agent and Claude Code workflow: `AGENTS.md`, `CLAUDE.md`, `docs/development/workflow.md`
+- Architecture: `docs/architecture/overview.md`

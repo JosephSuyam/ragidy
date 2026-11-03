@@ -1,5 +1,5 @@
 ---
-description: Resume work: review last session summary, git state, and propose the next step
+description: "Resume work: review last session summary, git state, and propose the next step"
 ---
 
 The SessionStart hook already loaded `docs/sessions/latest.md`, the git state, and the lesson count into context.

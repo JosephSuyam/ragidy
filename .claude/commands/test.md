@@ -1,5 +1,5 @@
 ---
-description: Write missing tests for a target, then run the full quality gate
+description: "Write missing tests for a target, then run the full quality gate"
 argument-hint: "[target path or behavior] [--fast]"
 ---
 

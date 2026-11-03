@@ -1,5 +1,5 @@
 ---
-description: Cut a release: verify main, tag a version, publish notes, promote to production
+description: "Cut a release: verify main, tag a version, publish notes, promote to production"
 argument-hint: "[version]"
 ---
 

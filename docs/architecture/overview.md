@@ -13,17 +13,23 @@ question ─▶ agent (LangGraph) ─▶ retrieve (LlamaIndex) ─▶ grade ─�
 
 | Stage | Owner | Module |
 |---|---|---|
-| Load and parse (PDF, DOCX, HTML, URL) | LlamaIndex readers | `app/ingestion` |
-| Chunk | LlamaIndex node parsers | `app/ingestion` |
-| Embed and index | LlamaIndex + `PGVectorStore` | `app/ingestion` |
-| Retrieve and rerank | LlamaIndex retrievers | `app/retrieval` |
-| Memory, loop, and generation | LangGraph + LangChain chat models | `app/agent` |
-| Model selection | Provider factory reading `Settings` | `app/providers` |
+| Ingest a file or URL, track status | LlamaIndex readers + `app/workers` | `app/rag/ingestion` |
+| Parse (PDF, DOCX, HTML) | LlamaIndex readers | `app/rag/parsers` |
+| Chunk | LlamaIndex node parsers | `app/rag/chunking` |
+| Embed | Provider factory, then LlamaIndex embedding | `app/rag/embeddings` |
+| Index | LlamaIndex `PGVectorStore` | `app/rag/indexing` |
+| Retrieve, rerank | LlamaIndex retrievers and postprocessors | `app/rag/retrieval`, `app/rag/reranking` |
+| Workflow: grade, rewrite, generate | LangGraph + LangChain chat models | `app/agents/workflows` |
+| Memory | LangGraph Postgres checkpointer | `app/agents/memory` |
+| Tools, state | LangChain tools, typed state | `app/agents/tools`, `app/agents/state` |
+| Model selection | Provider factory reading `Settings` | `app/core/providers.py` |
 
-**Boundary:** `app/retrieval` returns `list[RetrievedChunk]`, where each item holds `text`, `score` and `metadata` (source, page, document_id). `app/agent` wraps retrieval as a tool or graph node. LlamaIndex objects never leave `ingestion/` or `retrieval/`.
+**Boundary:** `app/rag/retrieval` returns `list[RetrievedChunk]`, where each item holds `text`, `score` and `metadata` (source, page, document_id). `app/agents` wraps retrieval as a tool or graph node. LlamaIndex objects never leave `app/rag/`.
+
+**Layering:** `api/routes` → `services` → (`rag` | `agents` | `repositories`) → `models`. Nothing calls upward.
 
 ## Providers
-`app/providers` builds the LLM and the embedding model from `LLM_PROVIDER`/`LLM_MODEL` and `EMBED_PROVIDER`/`EMBED_MODEL`. It is the only place that imports vendor SDKs.
+`app/core/providers.py` builds the LLM and the embedding model from `LLM_PROVIDER`/`LLM_MODEL` and `EMBED_PROVIDER`/`EMBED_MODEL`. It is the only place that imports vendor SDKs.
 
 **Constraint:** changing the embedding model or its dimensions requires a re-index. Store `embed_model` with each document and refuse to query across mismatched models.
 
