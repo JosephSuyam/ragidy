@@ -52,6 +52,7 @@ make check          # full quality gate; `make fast` skips integration tests
 make up             # full stack from production images
 ```
 Without `make`, run the commands in `Makefile` directly. The gate is `python infrastructure/scripts/check.py [--api|--web] [--fast]`.
+Code navigation: when `graphify-out/graph.json` exists, run `graphify query "<question>"` (or `path`, `explain`) before grepping or reading source, and `graphify update .` after code changes.
 Add dependencies with `uv add` (in `apps/api`) or `npm install` (in `apps/web`).
 
 ## Conventions

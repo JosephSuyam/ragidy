@@ -7,6 +7,7 @@ Chat with your files and links using Retrieval-Augmented Generation. LlamaIndex 
 - Node.js 22.12+ (or 20.19+)
 - Docker, for Postgres + pgvector
 - `make` (optional; every target is a plain command in `Makefile`)
+- [graphify](https://github.com/safishamsi/graphify) (optional): code knowledge graph for agents. See `docs/development/workflow.md`
 
 ## Setup
 ```bash

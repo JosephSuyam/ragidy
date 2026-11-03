@@ -3,6 +3,8 @@
 ## Setup
 Follow `README.md`: copy `.env.example` to `apps/api/.env`, then run `make install` and `make db`.
 
+Optional, for coding agents: install graphify (`uv tool install graphifyy`), then run `graphify update .` to build the code graph in `graphify-out/` (gitignored) and `graphify hook install` to rebuild it on each commit.
+
 ## Workflow
 1. Open or pick an issue. Bugs and features use the templates in `.github/ISSUE_TEMPLATE`.
 2. Branch from `main`: `git switch -c <type>/<short-name>`.

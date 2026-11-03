@@ -9,7 +9,7 @@ Run these steps in order. Do not skip a step; if one does not apply, say why in 
 
 1. **Plan.** If there is no approved plan yet, follow the `task-planning` skill. The output is a task list with an owner agent and an acceptance check for each slice.
 2. **Branch.** Follow the `git-workflow` skill (`<type>/<short-name>` from `main`).
-3. **Delegate.** Send each slice to its owner agent with the task, the files it owns, the API contract, and the acceptance check:
+3. **Delegate.** Send each slice to its owner agent with the task, the files it owns, the API contract, the acceptance check, and the graphify rule from `CLAUDE.md`:
 
 | Slice | Agent |
 |---|---|
