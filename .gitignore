@@ -20,6 +20,9 @@ dist/
 .claude/settings.local.json
 .claude/.state/
 
+# graphify: local code graph, rebuilt with `graphify update .`
+graphify-out/
+
 # OS / editors
 .DS_Store
 Thumbs.db
