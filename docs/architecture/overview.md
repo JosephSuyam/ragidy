@@ -2,14 +2,14 @@
 
 ## Pipeline
 
+```mermaid
+flowchart LR
+  src["upload / URL"] --> ingest["ingestion (LlamaIndex)<br/>load → parse → chunk → embed → index"] --> pg[("pgvector")]
+  q["question"] --> agent["agent (LangGraph)<br/>memory: Postgres checkpointer"] --> retrieve["retrieve (LlamaIndex)"] --> grade{"grade_chunks"} --> generate["generate"] --> out["streamed answer + citations"]
+  grade -->|"rewrite_query"| retrieve
 ```
-upload / URL ─▶ ingestion (LlamaIndex) ─▶ pgvector
-                 load → parse → chunk → embed → index
 
-question ─▶ agent (LangGraph) ─▶ retrieve (LlamaIndex) ─▶ grade ─▶ generate ─▶ streamed answer + citations
-              │  memory (Postgres checkpointer)          │
-              └────────── rewrite query, retry ◀─────────┘
-```
+More diagrams: [diagrams.md](diagrams.md).
 
 | Stage | Owner | Module |
 |---|---|---|
