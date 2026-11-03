@@ -1,0 +1,60 @@
+name: CI autofix
+
+# Self-annealing CI: when CI fails on a PR branch, Claude runs the /fix-ci playbook
+# and pushes a fix commit. Runs only when the ANTHROPIC_API_KEY secret is set.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  id-token: write
+
+jobs:
+  autofix:
+    # Guards: failures only, never main, never fork PRs (they would get our secrets),
+    # and one attempt per failure chain (skip if the failing commit is already an autofix).
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_branch != 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      !startsWith(github.event.workflow_run.head_commit.message, 'fix(ci)')
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - if: env.HAS_KEY != 'true'
+        run: echo "ANTHROPIC_API_KEY not set; skipping autofix."
+      - if: env.HAS_KEY == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
+          fetch-depth: 0
+      - if: env.HAS_KEY == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: env.HAS_KEY == 'true'
+        uses: astral-sh/setup-uv@v6
+      - if: env.HAS_KEY == 'true' && hashFiles('frontend/package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - if: env.HAS_KEY == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            CI run ${{ github.event.workflow_run.id }} failed on branch
+            ${{ github.event.workflow_run.head_branch }}. Follow .claude/skills/fix-ci/SKILL.md
+            for that run id. Commit as `fix(ci): <subject>` and push to the same branch.
+          claude_args: >-
+            --max-turns 40
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(gh run:*),Bash(python scripts/check.py:*),Bash(uv:*),Bash(npm:*),Bash(npx:*),Bash(git:*)"
