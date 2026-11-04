@@ -4,9 +4,9 @@
 
 ```mermaid
 flowchart LR
-  src["upload / URL"] --> ingest["ingestion (LlamaIndex)<br/>load → parse → chunk → embed → index"] --> pg[("pgvector")]
-  q["question"] --> agent["agent (LangGraph)<br/>memory: Postgres checkpointer"] --> retrieve["retrieve (LlamaIndex)"] --> grade{"grade_chunks"} --> generate["generate"] --> out["streamed answer + citations"]
-  grade -->|"rewrite_query"| retrieve
+  src["upload / URL"] --> ingest["Ingestion: LlamaIndex<br/>Load (app/rag/ingestion)<br/>Parse (app/rag/parsers)<br/>Chunk (app/rag/chunking)<br/>Embed (app/rag/embeddings)<br/>Index (app/rag/indexing)<br/>Status (app/workers)"] --> pg[("pgvector")]
+  q["question"] --> agent["Agent: LangGraph (app/agents/workflows)<br/>Memory (app/agents/memory)"] --> retrieve["Retrieve: LlamaIndex (app/rag/retrieval, app/rag/reranking)"] --> grade{"grade_chunks (app/agents/workflows)"} --> generate["Generate (app/agents/workflows)"] --> out["streamed answer + citations"]
+  grade -->|"rewrite_query (app/agents/workflows)"| retrieve
 ```
 
 More diagrams: [diagrams.md](diagrams.md).
