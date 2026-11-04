@@ -12,7 +12,7 @@
 | `/debug <symptom>` or `/debug ci [run]` | Root-cause fix and a lesson | `debugger`, `debugging` |
 | `/test [target]` | Write missing tests, then run the gate | `test-engineer`, `test-generation`, `test-validation` |
 | `/summarize` | Write `docs/sessions/latest.md` | `session-summary` |
-| `/release [version]` | Tag a version and promote staging to production | `release-management` |
+| `/release [version]` | Tag a version and publish release notes | `release-management` |
 
 For a big multi-agent feature, run the main session as `claude --agent orchestrator`. Subagents cannot spawn other agents, so the orchestrator must be the main session.
 
@@ -41,7 +41,7 @@ Skills (`.claude/skills/`) hold each procedure. Commands and agents point to the
    - Before you stop, `validate-change` runs `check.py --fast` and blocks the stop until it passes, up to 3 attempts.
    - Fix the root cause. Never weaken, skip, or delete a test, and never add a blanket ignore.
 2. **Lessons.** After a non-obvious bug, a gate failure that took more than one try, or a user correction, record a rule with the `documentation` skill.
-3. **CI.** The `autofix` job in `ci.yml` runs the `debugging` skill on red same-repo PRs when the `ANTHROPIC_API_KEY` secret is set. Locally, run `/debug ci`.
+3. **CI.** On a red push to `develop`, `staging`, or `main`, the `autofix` job in `pipeline.yml` runs the `debugging` skill and opens a `fix/autofix-<short sha>` PR into `develop`. It needs the `ANTHROPIC_API_KEY` secret and the repo setting "Allow GitHub Actions to create and approve pull requests" (Settings → Actions → General → Workflow permissions). Locally, run `/debug ci`.
 4. **Runtime.** App code follows the self-healing rules in `docs/architecture/overview.md`: retries, provider fallbacks, corrective RAG, and ingestion status.
 
 ## Sessions

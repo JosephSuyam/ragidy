@@ -3,7 +3,7 @@ description: "Review the current branch or a PR for correctness, security, RAG r
 argument-hint: "[PR number]"
 ---
 
-Review $ARGUMENTS. If no PR number is given, review the current branch against `main`.
+Review $ARGUMENTS. If no PR number is given, review the current branch against `develop`.
 
 Delegate to the `code-reviewer` agent, which follows the `code-review` skill. When the diff touches uploads, URL fetching, the DB, auth, or secrets, also run `/security-review`.
 

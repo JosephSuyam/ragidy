@@ -59,7 +59,7 @@ Add dependencies with `uv add` (in `apps/api`) or `npm install` (in `apps/web`).
 - KISS, DRY, YAGNI: build the smallest change that fully solves the task.
 - Layering: routes → services → (rag | agents | repositories) → models. Nothing calls upward.
 - Commits: `<type>(<scope>): <subject>`. Type is feature|fix|docs|style|refactor|test|chore|perf. The subject is imperative, 50 characters or fewer, with no period.
-- Branches: `<type>/<short-name>` from `main`. Never commit directly to `main`.
+- Branches: `<type>/<short-name>` from `develop`, merged by PR into `develop`, then promoted by PR `develop` → `staging` → `main`. Never commit directly to `develop`, `staging`, or `main`.
 - Never read or commit `.env` files or secrets.
 - Tests: mock LLMs and embeddings at `app/core/providers.py`. Mark tests that need Postgres or network with `@pytest.mark.integration`.
 - Every change passes `python infrastructure/scripts/check.py` before commit.

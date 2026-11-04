@@ -13,7 +13,7 @@ Run the `feature-development` skill end to end:
 4. Gate with `python infrastructure/scripts/check.py`. Send failures to the owning agent, or to `debugger` when the cause is unclear.
 5. Send the diff to `code-reviewer`. Route each blocker back to its owner.
 6. Send the diff to `documentation`. Then commit and open the PR with the `git-workflow` skill.
-7. Watch CI. On red, delegate to `debugger` with the run id.
+7. PRs trigger no CI. After the PR merges into `develop`, watch the `Pipeline` run. On red, delegate to `debugger` with the run id.
 
 Keep the user informed with one line per phase. Ask the user before any outward-facing or irreversible action: push, PR, release, or a destructive migration.
 
