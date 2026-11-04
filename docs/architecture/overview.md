@@ -1,5 +1,7 @@
 # Architecture
 
+**Users:** two tiers. Guests get a private, expiring session tied to an HTTP-only cookie, with no account. Registered users sign in with email and password, Google or GitHub. Each document and chat belongs to exactly one owner, a guest or a user ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)). Scope, limits per tier and acceptance criteria: [requirements.md](requirements.md).
+
 ## Pipeline
 
 ```mermaid
@@ -19,7 +21,7 @@ More diagrams: [diagrams.md](diagrams.md).
 
 | Stage | Owner | Module |
 |---|---|---|
-| Validate, fetch the URL, store the raw file, queue the job | Services: S3 client from `app/core`, `documents` row via `app/repositories` | `app/services` |
+| Validate against the owner's tier limits, fetch the URL, store the raw file, queue the job | Services: S3 client from `app/core`, `documents` row via `app/repositories` | `app/services` |
 | Claim the job, ingest, track status | Worker loop, `SKIP LOCKED` claim query, LlamaIndex readers | `app/workers`, `app/repositories`, `app/rag/ingestion` |
 | Parse (PDF, DOCX, HTML) | LlamaIndex readers | `app/rag/parsers` |
 | Chunk | LlamaIndex node parsers | `app/rag/chunking` |
@@ -32,6 +34,8 @@ More diagrams: [diagrams.md](diagrams.md).
 | Model selection | Provider factory reading `Settings` | `app/core/providers.py` |
 
 **Boundary:** `app/rag/retrieval` returns `list[RetrievedChunk]`, where each item holds `text`, `score` and `metadata` (source, page, document_id). `app/agents` wraps retrieval as a tool or graph node. LlamaIndex objects never leave `app/rag/`.
+
+**Auth:** routes resolve the session or guest cookie to one `owner_id` through `app/services`, and pass it down. Every document and chat query in `app/repositories` that routes or services call filters on `owner_id`; only the worker queries (claim, startup reset, status updates, object-key reads, purge) are exempt, and only `app/workers` calls them. Retrieval receives only the owner's document ids as plain data, so `app/rag` and `app/agents` never see users, guests or cookies. `app/api/middleware` rejects state-changing requests whose `Origin` is not the origin of `PUBLIC_BASE_URL`. The browser uses one origin, `PUBLIC_BASE_URL`: the web server (Vite in dev, the web container in production) proxies `/api/*` to the API and strips the prefix, so cookies are first-party and no CORS is needed. OAuth provider entries live in `app/core`, which is the only place that holds their client config.
 
 **Layering:** `api/routes` → `services`; `services` and `workers` (own process) → (`rag` | `agents` | `repositories` | `core`) → `models`. Routes never call `workers`. Nothing calls upward.
 
@@ -55,16 +59,19 @@ Every piece of app code must follow these rules.
    - Retries re-read the raw file from object storage. At startup, the single worker sets `processing` rows with `attempts >= 3` to `failed` with the error "worker stopped during the last attempt", and resets every other `processing` row to `pending` ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)).
    - The UI shows the status and offers a retry. A manual retry or re-index resets only a `failed` or `ready` row; a `pending` or `processing` row is not touched, and the API returns 409 Conflict ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)).
 6. **Fail safe at the boundary.**
-   - Validate uploads with a size limit and a MIME allowlist, checked on the server-detected type, never the client `Content-Type` header.
-   - Validate URLs: http(s) only, no private, loopback or link-local IPs (SSRF), with a timeout and a size cap. Check the IP actually connected to and every redirect hop (or refuse redirects). Validation and fetch live together in `app/services`.
+   - Validate uploads with the owner's tier size limit and type allowlist, checked on the server-detected type, never the client `Content-Type` header ([requirements.md](requirements.md)).
+   - Validate URLs: http(s) only, no private, loopback or link-local IPs (SSRF), with a timeout and the tier's size cap. Check the IP actually connected to and every redirect hop (or refuse redirects). Validation and fetch live together in `app/services`.
    - Return clear 4xx errors.
 
 ## Data (Postgres + object storage)
 State lives in Postgres (structured data, vectors, the job queue) and object storage (raw files). See [ADR 0002](../decisions/0002-object-storage-and-job-queue.md).
 
-- `documents`: id, source (filename or URL), status, error, embed_model, object_key, attempts, run_after, created_at
+- `documents`: id, owner_id, source (filename or URL), status, error, embed_model, object_key, attempts, run_after, created_at
+  - `owner_id` points to `owners`; a guest-to-user migration only rewrites it ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)).
   - The row is the ingestion job. The worker claims it with `SELECT ... FOR UPDATE SKIP LOCKED`.
   - `object_key` is `documents/<uuid>`, built by the server from a UUID it generates before the object write. It never comes from the filename, URL or any user input; the original filename or URL is kept only in `source`.
 - Object storage (SeaweedFS, or any S3-compatible store): one object per document at `object_key`, the raw upload or fetched URL content, with the server-detected MIME type as its `Content-Type`
 - Vector table: managed by LlamaIndex `PGVectorStore`, with `document_id` in its metadata
+- `chats`: id (also the LangGraph thread id), owner_id, title, created_at
 - LangGraph checkpointer tables: one thread per chat
+- Accounts ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)): `owners` (one row per guest or user), `users`, `oauth_accounts`, `sessions` (token hash, expiry), `guests` (token hash, expiry)

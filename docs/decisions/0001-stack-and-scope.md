@@ -4,6 +4,7 @@
 - Date: 2026-11-03
 - Amended: 2026-11-04 (delivery: branch flow and tree-hash promotion)
 - Amended: 2026-11-04 (store: raw files in object storage, see 0002)
+- Amended: 2026-11-04 (users: guest and registered tiers, see 0003)
 
 ## Context
 Ragidy lets a user upload a file or link and chat with it through RAG. We need to pick the stack and keep the first scope small.
