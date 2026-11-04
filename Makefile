@@ -1,10 +1,11 @@
-COMPOSE := docker compose -f infrastructure/docker/docker-compose.yml
+# apps/api/.env supplies the S3_* credentials that compose interpolates for seaweedfs
+COMPOSE := docker compose $(if $(wildcard apps/api/.env),--env-file apps/api/.env) -f infrastructure/docker/docker-compose.yml
 CHECK := python infrastructure/scripts/check.py
 
-.PHONY: help install db db-down api web check fast check-api check-web up images
+.PHONY: help install db s3 db-down api web check fast check-api check-web up images
 
 help: ## List targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
 
 install: ## Install api and web dependencies
 	cd apps/api && uv sync
@@ -13,7 +14,10 @@ install: ## Install api and web dependencies
 db: ## Start Postgres + pgvector on :5432
 	$(COMPOSE) up -d --wait db
 
-db-down: ## Stop Postgres (data volume kept)
+s3: ## Start SeaweedFS S3 object storage on :8333
+	$(COMPOSE) up -d --wait seaweedfs
+
+db-down: ## Stop Postgres and SeaweedFS (data volumes kept)
 	$(COMPOSE) down
 
 api: ## Run the API with reload on :8000
