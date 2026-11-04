@@ -9,7 +9,7 @@ Pipeline: **chunk → embed → index → retrieve → generate**.
 - **API:** Python 3.12, FastAPI, uv (`apps/api`)
 - **Data and retrieval:** LlamaIndex (`app/rag`). It ingests, parses, chunks, embeds, indexes, retrieves, and reranks.
 - **Orchestration:** LangChain + LangGraph (`app/agents`). It handles workflows, conversational memory, tools, and state.
-- **Store:** Postgres + pgvector, for vectors, documents, chat history, and LangGraph checkpoints. Migrations use Alembic.
+- **Store:** Postgres + pgvector, for vectors, documents, chat history, LangGraph checkpoints, and the ingestion job queue (the `documents` row is the job, ADR 0002). MinIO (any S3-compatible store in production) holds the raw uploads and fetched URL content. Migrations use Alembic.
 - **LLM and embeddings:** pluggable through env vars (`LLM_PROVIDER`, `LLM_MODEL`, `EMBED_PROVIDER`, `EMBED_MODEL`), resolved only in `app/core/providers.py`.
 - **Web:** React + TypeScript (Vite), Tailwind CSS v4, shadcn/ui, oxlint, Vitest (`apps/web`)
 - **CI/CD:** GitHub Actions, Docker images on GHCR
@@ -24,7 +24,7 @@ apps/api/app/
   api/routes/        thin HTTP handlers          api/middleware/  request middleware
   core/              config, providers, logging
   schemas/           Pydantic request and response models
-  services/          use cases: routes → services → rag | agents | repositories
+  services/          use cases: routes → services → rag | agents | repositories | core
   repositories/      all DB queries              models/          SQLAlchemy models
   rag/               ingestion, parsers, chunking, embeddings, indexing, retrieval, reranking
   agents/            workflows (LangGraph), memory, tools, state
@@ -57,7 +57,7 @@ Add dependencies with `uv add` (in `apps/api`) or `npm install` (in `apps/web`).
 
 ## Conventions
 - KISS, DRY, YAGNI: build the smallest change that fully solves the task.
-- Layering: routes → services → (rag | agents | repositories) → models. Nothing calls upward.
+- Layering: `api/routes` → `services`; `services` and `workers` (own process) → (`rag` | `agents` | `repositories` | `core`) → `models`. Routes never call `workers`. Nothing calls upward.
 - Commits: `<type>(<scope>): <subject>`. Type is feature|fix|docs|style|refactor|test|chore|perf. The subject is imperative, 50 characters or fewer, with no period.
 - Branches: `<type>/<short-name>` from `develop`, merged by PR into `develop`, then promoted by PR `develop` → `staging` → `main`. Never commit directly to `develop`, `staging`, or `main`.
 - Never read or commit `.env` files or secrets.
