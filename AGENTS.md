@@ -13,7 +13,7 @@ Pipeline: **chunk → embed → index → retrieve → generate**.
 - **LLM and embeddings:** pluggable through env vars (`LLM_PROVIDER`, `LLM_MODEL`, `EMBED_PROVIDER`, `EMBED_MODEL`), resolved only in `app/core/providers.py`.
 - **Web:** React + TypeScript (Vite), Tailwind CSS v4, shadcn/ui, oxlint, Vitest (`apps/web`)
 - **CI/CD:** GitHub Actions, Docker images on GHCR
-- **Users:** single user for now. `features/authentication` and `features/workspaces` are reserved placeholders (ADR 0001).
+- **Users (MVP):** guests get a private, expiring cookie session with no account; registered users sign in with email + password or Google/GitHub OAuth. Upload limits, file types, and document caps are configurable per tier (ADR 0003, `docs/architecture/requirements.md`). `features/workspaces` stays a reserved placeholder.
 
 **Hard rule:** LlamaIndex code lives only in `app/rag/`, and LangChain/LangGraph code lives only in `app/agents/`. Only plain data (`RetrievedChunk`: text, score, metadata) crosses between them. See `docs/architecture/overview.md`.
 

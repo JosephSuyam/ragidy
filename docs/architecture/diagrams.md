@@ -1,14 +1,16 @@
 # Architecture diagrams
 
-Source of truth: [overview.md](overview.md), [ADR 0001](../decisions/0001-stack-and-scope.md) and [ADR 0002](../decisions/0002-object-storage-and-job-queue.md). These diagrams only restate them.
+Source of truth: [overview.md](overview.md), [ADR 0001](../decisions/0001-stack-and-scope.md), [ADR 0002](../decisions/0002-object-storage-and-job-queue.md) and [ADR 0003](../decisions/0003-guest-and-user-accounts.md). These diagrams only restate them.
 
 ## Containers
 
 ```mermaid
 flowchart LR
   browser["Browser"] --> web["Web: React + Vite (apps/web)"]
-  web --> api["API: FastAPI (apps/api)"]
-  api --> db[("Postgres + pgvector<br/>vectors, documents and job queue, chat history, LangGraph checkpoints")]
+  web -->|"proxies /api/*, strips /api"| api["API: FastAPI (apps/api)"]
+  api --> db[("Postgres + pgvector<br/>vectors, documents and job queue, chat history, LangGraph checkpoints,<br/>owners, users, oauth_accounts, sessions, guests")]
+  browser -->|"sign-in redirect"| oauth["OAuth providers<br/>Google, GitHub"]
+  api -->|"OAuth client config (app/core)<br/>code exchange, identity"| oauth
   api -->|"raw file"| objstore[("Object storage: SeaweedFS<br/>raw uploads and fetched URL content")]
   worker["Worker (app/workers)<br/>separate process, API image"] -->|"claim pending row, SKIP LOCKED"| db
   worker -->|"read raw file"| objstore
@@ -17,7 +19,7 @@ flowchart LR
   worker -->|"Providers (app/core)"| emb
 ```
 
-Postgres holds structured state, vectors and the job queue; SeaweedFS holds the raw files. The API never runs ingestion: it stores the file, inserts a `pending` row, and the worker process claims it. Providers are resolved only in `app/core/providers.py`, the only place that imports vendor SDKs.
+Postgres holds structured state, vectors and the job queue; SeaweedFS holds the raw files. The API never runs ingestion: it stores the file, inserts a `pending` row, and the worker process claims it. Providers are resolved only in `app/core/providers.py`, the only place that imports vendor SDKs. OAuth providers are external: the browser is redirected to them to sign in, and the API exchanges the code and reads the identity server-side.
 
 ## Module layering
 
@@ -70,14 +72,14 @@ sequenceDiagram
   participant DB as Postgres + pgvector
   User->>UI: upload a file or give a URL
   UI->>R: file or URL
-  R->>S: create document
-  S->>S: validate file (size limit, server-detected MIME in allowlist)<br/>or URL (http(s) only, no private, loopback or link-local IPs,<br/>checked on the connected IP and every redirect hop, timeout, size cap), then fetch it
+  R->>S: create document for the owner (guest or user)
+  S->>S: check the tier's document cap, then validate the file<br/>(tier size limit, server-detected type in the tier allowlist)<br/>or URL (http(s) only, no private, loopback or link-local IPs,<br/>checked on the connected IP and every redirect hop, timeout, tier size cap), then fetch it
   alt invalid input
     S-->>R: validation error
     R-->>UI: clear 4xx error
   else valid input
     S->>OS: put raw file or fetched URL content at a server-generated key (app/core)
-    S->>DB: insert documents row, status pending, object key, embed_model (app/repositories)
+    S->>DB: insert documents row, owner_id, status pending, object key, embed_model (app/repositories)
     S-->>R: document id
     R-->>UI: document id, status pending
     W->>DB: claim pending row, SKIP LOCKED, status processing (app/repositories)
