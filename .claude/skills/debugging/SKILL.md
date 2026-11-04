@@ -1,6 +1,6 @@
 ---
 name: debugging
-description: Find and fix the root cause of a bug, a failing test, or a red GitHub Actions run, then record the lesson. Use for /debug, "this is broken", "test fails", "CI is red", or "fix the build". The CI workflow's autofix job also invokes it.
+description: Find and fix the root cause of a bug, a failing test, or a red GitHub Actions run, then record the lesson. Use for /debug, "this is broken", "test fails", "CI is red", or "fix the build". The `Pipeline` workflow's autofix job also invokes it.
 ---
 
 # Debugging
@@ -16,14 +16,15 @@ The `debugger` agent follows this method. For non-trivial bugs, delegate to that
 6. **Learn.** If the cause was non-obvious, record a lesson with the `documentation` skill.
 
 ## CI failure (`/debug ci [run-id]`)
-1. Find the failure. If no run id was given, run `gh run list --branch "$(git branch --show-current)" --limit 5`, then `gh run view <id> --log-failed`. Read only the failing steps.
+1. Find the failure. `Pipeline` runs only on pushes to `develop`, `staging`, and `main`. If no run id was given, run `gh run list --workflow pipeline.yml --limit 5`, then `gh run view <id> --log-failed`. Read only the failing steps.
 2. Reproduce it locally with the same command: `python infrastructure/scripts/check.py --api` or `--web`.
 3. Classify the cause:
    - **Code bug or test failure:** fix it with the local method above.
    - **Environment difference** (versions, OS, missing service or env var): fix the workflow or config, not the code.
    - **Flaky** (passes on rerun with no change): run `gh run rerun <id> --failed` once. If it is flaky again, fix the flakiness and do not rerun.
+   - **Security** (leaked secret or unpatched CVE): stop and report it to a human. Never edit `.gitleaksignore` or weaken a check.
 4. Run `python infrastructure/scripts/check.py` until it passes.
-5. Commit with `fix(ci): <subject>` or the matching scope, then push.
+5. Commit on a branch from `develop` (or, in the CI autofix job, on the prepared `fix/autofix-*` branch you are already on) with `fix(ci): <subject>` or the matching scope, then open a PR into `develop` with the `git-workflow` skill. Never push to `develop`, `staging`, or `main` directly.
 6. Record the root cause as a lesson with the `documentation` skill.
 7. Report: the cause, the fix, and the commit sha.
 

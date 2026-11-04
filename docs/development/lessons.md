@@ -14,3 +14,4 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - Quote YAML frontmatter values that contain `: `, because unquoted ones silently fail to parse (command descriptions fell back to body text). (workflow, 2026-11-03)
 - oxlint only warns by default, so `npm run lint` uses `--deny-warnings`; keep it, or lint never blocks. (web, 2026-11-03)
 - When a subagent reports that plan mode blocked its edits, ask the user whether auto mode needs to be turned on instead of re-launching the agent, because re-launches stay blocked and waste runs. (workflow, 2026-11-04)
+- PRs trigger no CI; after each merge, watch the Pipeline run (`gh run list --workflow pipeline.yml --branch <branch>`), because a merged PR is not proof the branch is green. (workflow, 2026-11-04)
