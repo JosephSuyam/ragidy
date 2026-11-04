@@ -19,29 +19,36 @@ One Postgres database holds all state. Providers are resolved only in `app/core/
 
 ```mermaid
 flowchart TD
-  routes["Routes (app/api/routes)"] --> services["Services (app/services)"]
-  services --> RAG
-  services --> AGENTS
-  services --> repos["Repositories (app/repositories)"]
-  services --> workers["Workers (app/workers)"]
-  workers --> ingestion
-  workers --> repos
-  subgraph RAG["RAG: LlamaIndex (app/rag)"]
+  subgraph API["API Layer: routes and request handling"]
+    routes["Routes (app/api/routes)"]
+  end
+  subgraph SERVICE["Service Layer: business logic and orchestration"]
+    services["Services (app/services)"]
+    workers["Workers (app/workers)"]
+  end
+  subgraph RAG["RAG Layer: LlamaIndex (app/rag)"]
     ingestion["Ingestion (app/rag/ingestion)<br/>Parsers (app/rag/parsers)<br/>Chunking (app/rag/chunking)<br/>Embeddings (app/rag/embeddings)<br/>Indexing (app/rag/indexing)"]
     retrieval["Retrieval (app/rag/retrieval)<br/>Reranking (app/rag/reranking)"]
   end
-  subgraph AGENTS["Agents: LangChain / LangGraph (app/agents)"]
+  subgraph AGENTS["Agent Layer: LangChain / LangGraph (app/agents)"]
     agentmods["Workflows (app/agents/workflows)<br/>Memory (app/agents/memory)<br/>Tools (app/agents/tools)<br/>State (app/agents/state)"]
   end
+  subgraph INFRA["Infrastructure Layer"]
+    repos["Repositories (app/repositories)"]
+    models["Models (app/models)"]
+    providers["Providers (app/core)"]
+    storage[("Storage: Postgres + pgvector")]
+  end
+  API --> SERVICE
+  SERVICE --> RAG
+  SERVICE --> AGENTS
+  SERVICE --> INFRA
+  RAG --> INFRA
+  AGENTS --> INFRA
   retrieval -.->|"RetrievedChunk (text, score, metadata)"| agentmods
-  RAG --> providers["Providers (app/core)"]
-  AGENTS --> providers
-  RAG --> models["Models (app/models)"]
-  AGENTS --> models
-  repos --> models
 ```
 
-Solid arrows mean "calls", and nothing calls upward. The dotted edge is the only thing that crosses between rag and agents, and it carries plain data.
+Arrows connect layers, not modules, and each one means "calls"; every arrow points down, and nothing calls upward. Routes only handle requests: they never run retrieval or touch the vector store, and go through services instead. The dotted edge is the only thing that crosses between rag and agents, and it carries plain data.
 
 ## Ingestion
 
