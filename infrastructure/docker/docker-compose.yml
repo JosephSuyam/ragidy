@@ -17,7 +17,30 @@ services:
       interval: 5s
       retries: 10
 
-  # Full stack from the production images: docker compose --profile app up --build
+  # S3 object storage. With no identity SeaweedFS allows anonymous access, so refuse to start without one.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.52@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$$AWS_ACCESS_KEY_ID" ] || [ -z "$$AWS_SECRET_ACCESS_KEY" ]; then
+          echo "seaweedfs: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set; refusing to start with anonymous access" >&2
+          exit 1
+        fi
+        exec /entrypoint.sh server -s3
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - seaweedfs_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      retries: 20
+
+  # Full stack from the production images: make up
   api:
     profiles: [app]
     build:
@@ -28,8 +51,10 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy
+      S3_ENDPOINT_URL: http://seaweedfs:8333
     ports:
       - "8000:8000"
+    # shortcut: api does not wait for seaweedfs; add depends_on service_healthy when the storage client lands.
     depends_on:
       db:
         condition: service_healthy
@@ -46,3 +71,4 @@ services:
 
 volumes:
   pgdata:
+  seaweedfs_data:

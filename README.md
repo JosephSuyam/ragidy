@@ -5,15 +5,16 @@ Chat with your files and links using Retrieval-Augmented Generation. LlamaIndex 
 ## Requirements
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
 - Node.js 22.12+ (or 20.19+)
-- Docker, for Postgres + pgvector
+- Docker, for Postgres + pgvector and SeaweedFS
 - `make` (optional; every target is a plain command in `Makefile`)
 - [graphify](https://github.com/safishamsi/graphify) (optional): code knowledge graph for agents. See `docs/development/workflow.md`
 
 ## Setup
 ```bash
-cp .env.example apps/api/.env   # then fill in the API keys
+cp .env.example apps/api/.env   # then fill in the API keys; set S3_* to any random values (openssl rand -hex 20)
 make install
 make db
+make s3                         # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
 make api                        # http://localhost:8000/health
 make web                        # http://localhost:5173
 ```
