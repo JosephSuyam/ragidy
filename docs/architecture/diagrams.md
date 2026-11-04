@@ -9,15 +9,15 @@ flowchart LR
   browser["Browser"] --> web["Web: React + Vite (apps/web)"]
   web --> api["API: FastAPI (apps/api)"]
   api --> db[("Postgres + pgvector<br/>vectors, documents and job queue, chat history, LangGraph checkpoints")]
-  api -->|"raw file"| minio[("Object storage: MinIO<br/>raw uploads and fetched URL content")]
+  api -->|"raw file"| objstore[("Object storage: SeaweedFS<br/>raw uploads and fetched URL content")]
   worker["Worker (app/workers)<br/>separate process, API image"] -->|"claim pending row, SKIP LOCKED"| db
-  worker -->|"read raw file"| minio
+  worker -->|"read raw file"| objstore
   api -->|"Providers (app/core)"| llm["LLM provider<br/>LLM_PROVIDER, LLM_MODEL"]
   api -->|"Providers (app/core)"| emb["Embedding provider<br/>EMBED_PROVIDER, EMBED_MODEL"]
   worker -->|"Providers (app/core)"| emb
 ```
 
-Postgres holds structured state, vectors and the job queue; MinIO holds the raw files. The API never runs ingestion: it stores the file, inserts a `pending` row, and the worker process claims it. Providers are resolved only in `app/core/providers.py`, the only place that imports vendor SDKs.
+Postgres holds structured state, vectors and the job queue; SeaweedFS holds the raw files. The API never runs ingestion: it stores the file, inserts a `pending` row, and the worker process claims it. Providers are resolved only in `app/core/providers.py`, the only place that imports vendor SDKs.
 
 ## Module layering
 
@@ -43,7 +43,7 @@ flowchart TD
     providers["Providers, object storage client (app/core)"]
     storage[("Storage: Postgres + pgvector<br/>Job queue: Postgres")]
   end
-  objstore[("Object storage: MinIO")]
+  objstore[("Object storage: SeaweedFS")]
   API --> SERVICE
   SERVICE --> RAG
   SERVICE --> AGENTS
@@ -66,7 +66,7 @@ sequenceDiagram
   participant S as Services (app/services)
   participant W as Workers (app/workers)
   participant RAG as RAG: LlamaIndex (app/rag)
-  participant OS as Object storage: MinIO
+  participant OS as Object storage: SeaweedFS
   participant DB as Postgres + pgvector
   User->>UI: upload a file or give a URL
   UI->>R: file or URL

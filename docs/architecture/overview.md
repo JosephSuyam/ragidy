@@ -5,7 +5,7 @@
 ```mermaid
 flowchart LR
   src["upload / URL"] --> svc["Services (app/services)"]
-  svc -->|"raw file"| objstore[("Object storage: MinIO")]
+  svc -->|"raw file"| objstore[("Object storage: SeaweedFS")]
   svc -->|"documents row, status pending"| queue[("Job queue: documents rows in Postgres")]
   queue -->|"claim, SKIP LOCKED (app/repositories)"| worker["Worker (app/workers)"]
   objstore -->|"raw file"| worker
@@ -65,6 +65,6 @@ State lives in Postgres (structured data, vectors, the job queue) and object sto
 - `documents`: id, source (filename or URL), status, error, embed_model, object_key, attempts, run_after, created_at
   - The row is the ingestion job. The worker claims it with `SELECT ... FOR UPDATE SKIP LOCKED`.
   - `object_key` is `documents/<uuid>`, built by the server from a UUID it generates before the object write. It never comes from the filename, URL or any user input; the original filename or URL is kept only in `source`.
-- Object storage (MinIO, or any S3-compatible store): one object per document at `object_key`, the raw upload or fetched URL content, with the server-detected MIME type as its `Content-Type`
+- Object storage (SeaweedFS, or any S3-compatible store): one object per document at `object_key`, the raw upload or fetched URL content, with the server-detected MIME type as its `Content-Type`
 - Vector table: managed by LlamaIndex `PGVectorStore`, with `document_id` in its metadata
 - LangGraph checkpointer tables: one thread per chat
