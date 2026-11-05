@@ -78,12 +78,12 @@ sequenceDiagram
     S-->>R: validation error
     R-->>UI: clear 4xx error
   else valid input
-    S->>OS: put raw file or fetched URL content at a server-generated key (app/core)
-    S->>DB: insert documents row, owner_id, status pending, object key, embed_model (app/repositories)
+    S->>OS: put raw file or fetched URL content at documents/<id>, a server-generated id (app/core)
+    S->>DB: insert documents row with that id, owner_id, status pending, embed_model (app/repositories)
     S-->>R: document id
     R-->>UI: document id, status pending
     W->>DB: claim pending row, SKIP LOCKED, status processing (app/repositories)
-    W->>OS: read raw file by object key (app/core)
+    W->>OS: read raw file at documents/<id> (app/core)
     W->>RAG: Load (app/rag/ingestion), Parse (app/rag/parsers),<br/>Chunk (app/rag/chunking), Embed (app/rag/embeddings),<br/>Index (app/rag/indexing)
     RAG->>DB: PGVectorStore writes vectors (app/rag/indexing)
     alt success
@@ -112,5 +112,84 @@ flowchart LR
   grade -->|"still low after 2 rewrites"| notfound["Answer: not found in the document (app/agents/workflows)"]
   generate --> out["streamed answer + citations"]
 ```
+
+## Database schema
+
+```mermaid
+erDiagram
+  %% Attributes are written name-first so the column name renders in the first column.
+  owners ||--o| users : "is (CASCADE)"
+  owners ||--o| guests : "is (CASCADE)"
+  users ||--o{ sessions : "has (CASCADE)"
+  users ||--o{ oauth_accounts : "has (CASCADE)"
+  owners ||--o{ documents : "owns (RESTRICT)"
+  owners ||--o{ chats : "owns (RESTRICT)"
+  chats ||--o{ messages : "has (CASCADE)"
+  owners {
+    id uuid PK
+    kind text "user or guest"
+    created_at timestamptz
+  }
+  users {
+    id uuid PK
+    owner_id uuid FK, UK
+    email text UK "nullable, normalized"
+    name text "nullable"
+    password text "nullable, hash only"
+    created_at timestamptz
+  }
+  guests {
+    id uuid PK
+    owner_id uuid FK, UK
+    token bytea UK "hash only"
+    expires_at timestamptz "indexed"
+    created_at timestamptz
+  }
+  sessions {
+    id uuid PK
+    user_id uuid FK "indexed"
+    token bytea UK "hash only"
+    expires_at timestamptz "indexed"
+    created_at timestamptz
+  }
+  oauth_accounts {
+    id uuid PK
+    user_id uuid FK "indexed"
+    provider text "unique with provider_user_id"
+    provider_user_id text
+    created_at timestamptz
+  }
+  documents {
+    id uuid PK "object key documents/id"
+    owner_id uuid FK "indexed"
+    source text "filename or URL"
+    status text "default pending"
+    error text "nullable"
+    embed_model text
+    attempts int "default 0"
+    run_after timestamptz "default now"
+    created_at timestamptz
+  }
+  chats {
+    id uuid PK "LangGraph thread id"
+    owner_id uuid FK
+    title text "nullable"
+    created_at timestamptz
+  }
+  messages {
+    id uuid PK
+    chat_id uuid FK
+    role text "user or assistant"
+    content text
+    citations jsonb "default empty array"
+    created_at timestamptz
+  }
+```
+
+- CHECK constraints: `owners.kind` is `user` or `guest`; `users.email` equals `lower(btrim(email))`, so its unique constraint holds on the normalized form; `documents.status` is `pending`, `processing`, `ready` or `failed`, and `failed` requires a non-empty `error`; `messages.role` is `user` or `assistant`.
+- The partial index `ix_documents_pending_run_after` (on `run_after`, `WHERE status = 'pending'`) serves the worker's job-queue claim ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)). `chats` and `messages` have `(owner_id, created_at)` and `(chat_id, created_at)` indexes for listing.
+- `RESTRICT` on `documents` and `chats` blocks deleting an owner that still owns either, so a cascade never drops rows whose vectors, objects or checkpoints still exist. The guest purge deletes those first, then the rows, then the owner ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)).
+- The object key is not a column: it is `documents/<id>`, derived from the document's `id`.
+- The LlamaIndex vector table and the LangGraph checkpoint tables live in the same database, but outside Alembic and this diagram.
 
 [Runtime self-healing rules](overview.md#runtime-self-healing-rules)
