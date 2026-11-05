@@ -1,7 +1,7 @@
 # Contributing
 
 ## Setup
-Follow `README.md`: copy `.env.example` to `apps/api/.env`, then run `make install`, `make db`, and `make s3`.
+Follow `README.md`: copy `.env.example` to `apps/api/.env`, then run `make install`, `make db`, `make migrate`, and `make s3`.
 
 Optional, for coding agents: install graphify (`uv tool install graphifyy`), then run `graphify update .` to build the code graph in `graphify-out/` (gitignored) and `graphify hook install` to rebuild it on each commit.
 

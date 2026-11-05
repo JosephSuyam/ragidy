@@ -1,35 +1,48 @@
-# Session summary (2026-11-03 17:00)
+# Session summary (2026-11-05 01:36)
 
 ## Goal
-Restructure the repo into the user's monorepo layout (apps/, packages/, infrastructure/, docs/ tree), moving existing files rather than recreating them, and fill in the new agents, skills, commands, and workflows.
+Finish MVP step 2 (guest + register/login, per-tier limits), merge it, then plan the next MVP step (first DB migration).
 
 ## Done
-- Moved backend → apps/api, frontend → apps/web, check.py → infrastructure/scripts, compose → infrastructure/docker, hook logic → .claude/hooks/scripts behind .sh wrappers (a01f700)
-- Renamed and merged the skills and agents. Added 8 agents, 5 skills, and 8 commands (543de01)
-- Added Dockerfiles, DB init SQL, and the Makefile (6cfbfc3)
-- Split CI into ci (with an autofix job), tests, security, deploy-staging, and deploy-production. Added issue templates (ca7c88a)
-- Wrote AGENTS.md (shared rules), CLAUDE.md (Claude-specific), CONTRIBUTING, docs/{api,development,decisions}, ADR 0001
-- `python infrastructure/scripts/check.py` is green, and pip-audit is clean
+- PR #6 merged into `develop` (5c8a9f1): per-tier limit and auth settings in `apps/api/app/core/config.py` (99e624b), MVP requirements + ADR 0003 (c774b78), lessons (261aa3b).
+- Pipeline run 41851117928 on `develop`: success (security, api, web green; build/deploy skipped).
+- Added `"Bash(gh pr merge:*)"` to `.claude/settings.json` allow list; the auto-mode classifier had denied `gh pr merge 6 --merge --delete-branch`.
+- MVP order changed by the user: step 4 is now the first DB migration, step 5 is `app/core/providers.py` + logging.
+- Planner produced the step 4 plan (below). Not yet approved.
+
+## In progress
+- MVP step 4 (first migration): plan presented, waiting for user approval and answers to 3 open questions. No code written. Branch `feature/db-schema` not created yet.
 
 ## Next steps
-1. Merge `refactor/monorepo-layout`, which contains `chore/frontend-scaffold`, into `main`.
-2. When the user is ready: `gh repo create`, push, add the `ANTHROPIC_API_KEY` secret, and create the `staging` and `production` environments (add an approval rule on production).
-3. Pick a hosting target, then replace the placeholder deploy steps in the deploy-*.yml files.
-4. Start the MVP with `/plan`: the provider factory, then ingestion, then retrieval, then the LangGraph workflow, then the upload and chat UI.
+1. Get approval of the step 4 plan and answers to the open questions, then branch `feature/db-schema` from `develop`.
+2. T1 database-engineer: `uv add sqlalchemy alembic "psycopg[binary]"`; delete `apps/api/alembic/.gitkeep` before `uv run alembic init alembic`; `alembic.ini` without `sqlalchemy.url`; `env.py` URL from `config.attributes.get("database_url") or get_settings().database_url`; `include_object` skips reflected tables with no model; `app/models/base.py` DeclarativeBase with naming_convention.
+3. T2 models (`app/models/accounts.py`, `documents.py`), then T3 revision `0001_initial_schema` (`--rev-id 0001`).
+4. In parallel after T3: T4 test-engineer `tests/test_migrations.py` (integration, throwaway DB `ragidy_test_<hex>`); T5 devops `make migrate`; T6 documentation (AGENTS.md, overview.md, `.claude/agents/database-engineer.md` → `psycopg[binary]`).
+5. Gate, code-review, docs, PR into `develop`, watch Pipeline.
+6. Decide where to commit the `.claude/settings.json` rule (shared file, or move to `.claude/settings.local.json`).
 
 ## Decisions
-- AGENTS.md holds the tool-agnostic rules, and CLAUDE.md imports it. This avoids duplicating them.
-- Skills hold the procedures. Commands and agents only point to them.
-- ci-autofix.yml was merged into ci.yml as the `autofix` job, so the workflow list matches the requested layout.
-- Production promotes the staging `sha-<sha>` image and never rebuilds.
-- Auth and workspaces are placeholders only; the app is still single user (ADR 0001).
+- Step 4 schema contract (planner, pending approval). Tables: owners, users, guests, sessions, oauth_accounts, documents, chats.
+  - uuid PKs `gen_random_uuid()`, `timestamptz`, text + named CHECK instead of PG enums.
+  - users: `email` unique and nullable, `password_hash` nullable.
+  - guests, sessions: `token_hash bytea`.
+  - oauth_accounts: `UNIQUE(provider, provider_user_id)`, no CHECK on provider.
+  - documents: `run_after NOT NULL DEFAULT now()`, partial index `(run_after) WHERE status='pending'`, CHECK failed ⇒ error non-empty.
+  - owners → users/guests ON DELETE CASCADE; owners → documents/chats ON DELETE RESTRICT, so purge order is enforced (ADR 0003).
+  - pgvector and LangGraph checkpoint tables stay out of Alembic.
+- Repositories and DB session module deferred: no caller yet.
 
 ## Open questions
-- Hosting target for staging and production.
-- The project skill `code-review` shares its name with the built-in `/code-review`. Confirm which one runs, or rename it.
+- Chat history storage: app `messages` table (role, content, citations jsonb) in revision 0002? Recommended yes.
+- Is `documents.id` the UUID in `object_key` (`documents/<uuid>`)? Recommended yes.
+- Sync or async SQLAlchemy for request code? Recommended async.
 
-## Not verified
-- Docker image builds: the Docker daemon was not running.
-- All GitHub workflows: there is no remote yet.
+## Known gaps
+- `infrastructure/docker/api.Dockerfile` does not copy `alembic/` or `alembic.ini`, and no deploy step runs `upgrade head`; fix before the first DB-backed route.
+- Still open from earlier: `/api` proxy (Vite + web container) and `--no-proxy-headers` (step 14); SeaweedFS internal-port hardening before the public guest tier.
 
-Branch: refactor/monorepo-layout | PR: none | CI: not run (no remote)
+## Files touched
+- `.claude/settings.json`: allow `Bash(gh pr merge:*)` (uncommitted).
+- `docs/sessions/latest.md`, `docs/sessions/archive/*`: session summaries.
+
+Branch: docs/session-2026-11-05 (local only) | Uncommitted: .claude/settings.json | PR: #6 merged | CI: develop green (41851117928)

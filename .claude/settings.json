@@ -19,6 +19,7 @@
       "Bash(gh run view:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr checks:*)",
+      "Bash(gh pr merge:*)",
       "Bash(docker compose ps:*)",
       "Bash(graphify query:*)",
       "Bash(graphify path:*)",

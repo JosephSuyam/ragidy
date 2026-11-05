@@ -65,13 +65,15 @@ Every piece of app code must follow these rules.
 
 ## Data (Postgres + object storage)
 State lives in Postgres (structured data, vectors, the job queue) and object storage (raw files). See [ADR 0002](../decisions/0002-object-storage-and-job-queue.md).
+Tables, columns and keys: [Database schema](diagrams.md#database-schema).
 
-- `documents`: id, owner_id, source (filename or URL), status, error, embed_model, object_key, attempts, run_after, created_at
+- `documents`: id, owner_id, source (filename or URL), status, error, embed_model, attempts, run_after, created_at
   - `owner_id` points to `owners`; a guest-to-user migration only rewrites it ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)).
   - The row is the ingestion job. The worker claims it with `SELECT ... FOR UPDATE SKIP LOCKED`.
-  - `object_key` is `documents/<uuid>`, built by the server from a UUID it generates before the object write. It never comes from the filename, URL or any user input; the original filename or URL is kept only in `source`.
-- Object storage (SeaweedFS, or any S3-compatible store): one object per document at `object_key`, the raw upload or fetched URL content, with the server-detected MIME type as its `Content-Type`
+  - The object key is not stored: it is `documents/<id>`, derived from the row's `id`, which the service generates before the object write. It never comes from the filename, URL or any user input; the original filename or URL is kept only in `source`.
+- Object storage (SeaweedFS, or any S3-compatible store): one object per document at `documents/<id>`, the raw upload or fetched URL content, with the server-detected MIME type as its `Content-Type`
 - Vector table: managed by LlamaIndex `PGVectorStore`, with `document_id` in its metadata
 - `chats`: id (also the LangGraph thread id), owner_id, title, created_at
+- `messages`: id, chat_id (deleted with its chat), role (`user` or `assistant`), content, citations (JSON, default `[]`), created_at. This is the chat history the API returns.
 - LangGraph checkpointer tables: one thread per chat
 - Accounts ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)): `owners` (one row per guest or user), `users`, `oauth_accounts`, `sessions` (token hash, expiry), `guests` (token hash, expiry)

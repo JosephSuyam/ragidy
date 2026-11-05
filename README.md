@@ -14,6 +14,7 @@ Chat with your files and links using Retrieval-Augmented Generation. LlamaIndex 
 cp .env.example apps/api/.env   # then fill in the API keys; set S3_* to any random values (openssl rand -hex 20)
 make install
 make db
+make migrate                    # apply DB migrations; needs make db
 make s3                         # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
 make api                        # http://localhost:8000/health
 make web                        # http://localhost:5173

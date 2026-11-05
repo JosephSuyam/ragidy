@@ -47,6 +47,7 @@ Empty folders hold a placeholder (`__init__.py` or `.gitkeep`) until their first
 make install        # uv sync + npm install
 make db             # Postgres + pgvector on :5432
 make s3             # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
+make migrate        # apply Alembic migrations; needs make db
 make api            # API on :8000 (reload)
 make web            # web on :5173
 make check          # full quality gate; `make fast` skips integration tests

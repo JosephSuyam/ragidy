@@ -32,7 +32,7 @@ All cookies (`ragidy_session`, `ragidy_guest` and `ragidy_oauth`) are `HttpOnly;
 
 ### R2 Register with email and password
 - [ ] Given a new email and a password of 8 to 128 characters, when `POST /auth/register` is called, then it returns `201`, creates the user and a session, and sets `ragidy_session`.
-- [ ] The email is trimmed and lowercased. An email that already exists, including on an OAuth-only account, returns `409 email_taken`. `users.email` has a unique index on the normalized email, so a concurrent duplicate registration also returns `409 email_taken`.
+- [ ] The email is trimmed and lowercased. An email that already exists, including on an OAuth-only account, returns `409 email_taken`. `users.email` has a unique index on the normalized email (it is stored normalized, enforced by a CHECK, under a plain unique constraint), so a concurrent duplicate registration also returns `409 email_taken`.
 - [ ] A password outside 8 to 128 characters returns `422`.
 - [ ] The stored hash starts with `$argon2id$`.
 - [ ] The session is issued as in R3.

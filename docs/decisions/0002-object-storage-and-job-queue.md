@@ -48,7 +48,10 @@ Ingestion needs the original file: a failed job retries from it, and a new embed
 - One worker process runs beside the API, from the same image with a different command. Compose has the `seaweedfs` service and `make s3` starts it; the api container reaches it at `S3_ENDPOINT_URL=http://seaweedfs:8333`. The `worker` service waits for the worker entry point.
 - shortcut: one worker with a startup reset is safe only while a single worker runs. Scaling to more than one worker needs a lease plus guarded writes, and a new ADR.
 - Config is S3-style env vars: `S3_ENDPOINT_URL`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`. They are in `.env.example` and `Settings`. Creating the private bucket waits for the storage client.
-- The `documents` row stores the `object_key`, plus `attempts` and `run_after timestamptz NOT NULL DEFAULT now()`.
+- The `documents` row stores `attempts` and `run_after timestamptz NOT NULL DEFAULT now()`. The object key is derived from its `id`, not stored (see the amendment).
 - Indexing a document first deletes its existing vectors, because a retry after a run that indexed only part of the document would otherwise leave duplicates. The same rule makes a re-index from the original safe.
 - A manual retry or re-index resets only a `failed` or `ready` row, with a guarded `UPDATE documents SET status = 'pending', attempts = 0, run_after = now() WHERE id = :id AND status IN ('failed','ready')`. A `pending` or `processing` row is not touched, and the API returns 409 Conflict. The raw file is still in storage. Deleting a document deletes its object. A failed insert after the upload leaves an orphan object, which is harmless.
 - Polling adds up to one poll interval of latency. `LISTEN/NOTIFY` is the upgrade if that matters.
+
+## Amendment (2026-11-05)
+- There is no `object_key` column. The key is `documents/<id>`, derived from `documents.id`. The service generates that id before the object write, so the key still never comes from user input.
