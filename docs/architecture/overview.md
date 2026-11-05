@@ -40,14 +40,20 @@ More diagrams: [diagrams.md](diagrams.md).
 **Layering:** `api/routes` → `services`; `services` and `workers` (own process) → (`rag` | `agents` | `repositories` | `core`) → `models`. Routes never call `workers`. Nothing calls upward.
 
 ## Providers
-`app/core/providers.py` builds the LLM and the embedding model from `LLM_PROVIDER`/`LLM_MODEL` and `EMBED_PROVIDER`/`EMBED_MODEL`. It is the only place that imports vendor SDKs.
+`app/core/providers.py` builds the models from `Settings` (`LLM_PROVIDER`/`LLM_MODEL`, `EMBED_PROVIDER`/`EMBED_MODEL`) ([ADR 0004](../decisions/0004-provider-factory.md)):
+- `get_chat_model(settings) -> BaseChatModel`: `anthropic`, `openai` or `ollama`.
+- `get_embed_model(settings) -> BaseEmbedding`: `openai` or `ollama`.
+
+It returns plain models, not wrapped, so agents can call `.with_structured_output` or `.bind_tools`. A missing API key raises `ValueError` naming the setting, never its value. Callers use `providers.get_chat_model(settings)` through the module, so tests mock models here.
+
+**Single exception to the hard rule:** `providers.py` is the only module that imports vendor model integrations. It imports LangChain and LlamaIndex model classes only to construct them. No other code in `app/core` imports either framework.
 
 **Constraint:** changing the embedding model or its dimensions requires a re-index. Store `embed_model` with each document and refuse to query across mismatched models.
 
 ## Runtime self-healing rules
 Every piece of app code must follow these rules.
 
-1. **Retry transient failures.** Wrap LLM and embedding calls with `.with_retry(stop_after_attempt=3, wait_exponential_jitter=True)`. Retry only on timeouts, 429 and 5xx responses, never on 4xx validation errors.
+1. **Retry transient failures.** `app/core/providers.py` sets the SDKs' built-in retries and a 60 s timeout: chat models get `max_retries=2` (3 attempts in total), and the OpenAI embedding gets `EMBED_MAX_RETRIES = 1` (at most 2 requests, because LlamaIndex applies it twice). They retry connection errors, 408, 409, 429 and 5xx, never other 4xx. Do not add `.with_retry` on top: it retries every exception by default and stacks on the SDK retries. Ollama runs locally and has no retry.
 2. **Fall back across providers.** When a second provider is configured, build the chat model as `primary.with_fallbacks([secondary])`.
 3. **Corrective RAG.** The LangGraph flow is `retrieve → grade_chunks → (generate | rewrite_query → retrieve)`.
    - The grader scores relevance.
@@ -55,7 +61,7 @@ Every piece of app code must follow these rules.
    - After that, it answers "not found in the document" instead of guessing.
 4. **Grounded answers only.** Every answer cites the chunks it used. When retrieval returns nothing, say so; never answer from model memory.
 5. **Ingestion status.** Each document moves through `pending → processing → ready | failed` and stores an `error` field.
-   - Ingestion gets 3 attempts in total, with backoff between them, matching `stop_after_attempt=3`. After a failure, the row goes back to `pending` while `attempts < 3`, and becomes `failed` with its error after that.
+   - Ingestion gets 3 attempts in total, with backoff between them. After a failure, the row goes back to `pending` while `attempts < 3`, and becomes `failed` with its error after that.
    - Retries re-read the raw file from object storage. At startup, the single worker sets `processing` rows with `attempts >= 3` to `failed` with the error "worker stopped during the last attempt", and resets every other `processing` row to `pending` ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)).
    - The UI shows the status and offers a retry. A manual retry or re-index resets only a `failed` or `ready` row; a `pending` or `processing` row is not touched, and the API returns 409 Conflict ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)).
 6. **Fail safe at the boundary.**
