@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from app.core.config import SUPPORTED_UPLOAD_TYPES, Settings
+from app.core.config import SUPPORTED_UPLOAD_TYPES, Settings, TierLimits
 
 AUTH_SECRET = "test-auth-secret-0123456789abcdef"
 POSITIVE_INT_FIELDS = [
@@ -178,3 +178,31 @@ def test_unknown_provider_rejected(monkeypatch: pytest.MonkeyPatch, field: str, 
     with pytest.raises(ValidationError, match=only_error_on(field)) as exc:
         load()
     assert value not in str(exc.value)
+
+
+def test_limits_map_per_tier_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    tier_env = {
+        "UPLOAD_MAX_MB_GUEST": "2",
+        "UPLOAD_MAX_MB_USER": "9",
+        "UPLOAD_TYPES_GUEST": "pdf",
+        "UPLOAD_TYPES_USER": "md,txt",
+        "MAX_DOCS_GUEST": "4",
+        "MAX_DOCS_USER": "40",
+        "CHAT_MESSAGES_PER_HOUR_GUEST": "6",
+        "CHAT_MESSAGES_PER_HOUR_USER": "60",
+    }
+    for name, value in tier_env.items():
+        monkeypatch.setenv(name, value)
+    settings = load()
+    assert settings.limits("guest") == TierLimits(2, ["pdf"], 4, 6)
+    assert settings.limits("user") == TierLimits(9, ["md", "txt"], 40, 60)
+
+
+@pytest.mark.parametrize(
+    ("url", "secure"), [("https://app.example.com", True), ("http://localhost:5173", False)]
+)
+def test_cookie_secure_follows_public_base_url_scheme(
+    monkeypatch: pytest.MonkeyPatch, url: str, secure: bool
+) -> None:
+    monkeypatch.setenv("PUBLIC_BASE_URL", url)
+    assert load().cookie_secure is secure

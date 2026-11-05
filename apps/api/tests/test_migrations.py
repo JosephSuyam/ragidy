@@ -1,19 +1,15 @@
 import uuid
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
-from alembic.config import Config
-from sqlalchemy import Connection, Engine, create_engine, inspect, make_url, text
+from conftest import alembic_config, throwaway_db
+from sqlalchemy import Connection, Engine, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from alembic import command
-from app.core.config import get_settings
 from app.models import Base
 
 pytestmark = pytest.mark.integration
-
-ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 
 PARENT = {
     "users": "owners",
@@ -80,29 +76,15 @@ UNIQUES = [
 ]
 
 
-def alembic_config(url: str) -> Config:
-    cfg = Config(str(ALEMBIC_INI))
-    cfg.attributes["database_url"] = url
-    return cfg
-
-
 @pytest.fixture(scope="module")
 def engine() -> Iterator[Engine]:
-    server_url = make_url(get_settings().database_url)
-    name = f"ragidy_test_{uuid.uuid4().hex}"
-    admin = create_engine(server_url, isolation_level="AUTOCOMMIT")
-    with admin.connect() as conn:
-        conn.execute(text(f'CREATE DATABASE "{name}"'))
-    url = server_url.set(database=name).render_as_string(hide_password=False)
-    test_engine = create_engine(url)
-    try:
-        command.upgrade(alembic_config(url), "head")
-        yield test_engine
-    finally:
-        test_engine.dispose()
-        with admin.connect() as conn:
-            conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
-        admin.dispose()
+    # Own database, not the shared db_url: these tests downgrade to base.
+    with throwaway_db() as url:
+        test_engine = create_engine(url)
+        try:
+            yield test_engine
+        finally:
+            test_engine.dispose()
 
 
 @pytest.fixture
