@@ -35,12 +35,14 @@ Finish MVP step 2 (guest + register/login, per-tier limits), merge it, then plan
 ## Open questions
 - Chat history storage: app `messages` table (role, content, citations jsonb) in revision 0002? Recommended yes.
 - Is `documents.id` the UUID in `object_key` (`documents/<uuid>`)? Recommended yes.
-- Sync or async SQLAlchemy for request code? Recommended async.
 
 ## Known gaps
-- `infrastructure/docker/api.Dockerfile` does not copy `alembic/` or `alembic.ini`, and no deploy step runs `upgrade head`; fix before the first DB-backed route.
+- Closed (step 6): the api image now ships `alembic/` and `alembic.ini`, and the one-shot compose `migrate` service runs `alembic upgrade head` before api starts.
+- `llama-index-vector-stores-postgres` 0.9.0 (`PGVectorStore`) requires `sqlalchemy<2.1`, repo is on 2.1.8; decide at the indexing step: pin 2.0.x, wait for upstream, or a small pgvector store in `app/rag`.
 - Linux Docker: api service needs `extra_hosts: ["host.docker.internal:host-gateway"]` for Ollama on the host (deployment step 14).
-- Still open from earlier: `/api` proxy (Vite + web container) and `--no-proxy-headers` (step 14); SeaweedFS internal-port hardening before the public guest tier.
+- Still open from earlier: `/api` proxy (Vite + web container) (step 14); SeaweedFS internal-port hardening before the public guest tier.
+- Cookie names have no `__Host-` prefix, so a sibling subdomain could plant a guest cookie; settle before production on a shared parent domain.
+- Upload step: web client must send the first write alone and wait for the guest cookie (concurrent cookieless writes create orphan guests).
 
 ## Files touched
 - `.claude/settings.json`: allow `Bash(gh pr merge:*)` (uncommitted).

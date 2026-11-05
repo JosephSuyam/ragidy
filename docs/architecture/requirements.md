@@ -26,9 +26,9 @@ All cookies (`ragidy_session`, `ragidy_guest` and `ragidy_oauth`) are `HttpOnly;
 - [ ] Given no cookie, when a client makes its first write (upload, URL, new chat), then the server creates a guest, sets `ragidy_guest` with `Max-Age` of `GUEST_TTL_DAYS` days, and the write belongs to that guest.
 - [ ] Given no cookie, when a client lists documents or chats, then it gets `200` with an empty list and no guest row is created.
 - [ ] Given guests A and B, when B reads, retries or deletes A's document or chat by id, then the response is `404`.
-- [ ] No table contains the raw cookie value; `guests` holds only its hash.
-- [ ] An unknown or expired guest cookie is treated as no cookie.
-- [ ] A client IP key (see Security) may create `GUEST_CREATE_PER_IP_PER_HOUR` guests an hour. Over that, the write returns `429 rate_limited` with `Retry-After` and creates no guest.
+- [x] No table contains the raw cookie value; `guests` holds only its hash.
+- [x] An unknown or expired guest cookie is treated as no cookie.
+- [x] A client IP key (see Security) may create `GUEST_CREATE_PER_IP_PER_HOUR` guests an hour. Over that, the write returns `429 rate_limited` with `Retry-After` and creates no guest.
 
 ### R2 Register with email and password
 - [ ] Given a new email and a password of 8 to 128 characters, when `POST /auth/register` is called, then it returns `201`, creates the user and a session, and sets `ragidy_session`.
