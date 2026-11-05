@@ -6,6 +6,7 @@
 - Amended: 2026-11-04 (store: raw files in object storage, see 0002)
 - Amended: 2026-11-04 (users: guest and registered tiers, see 0003)
 - Amended: 2026-11-05 (library split: providers exception, see [0004](0004-provider-factory.md))
+- Amended: 2026-11-05 (store: async request DB access, see [0005](0005-request-db-access.md))
 
 ## Context
 Ragidy lets a user upload a file or link and chat with it through RAG. We need to pick the stack and keep the first scope small.

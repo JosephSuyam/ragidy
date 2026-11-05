@@ -222,6 +222,7 @@ jobs:
     steps:
       # shortcut: no hosting target chosen yet; images are pushed but not deployed.
       # Replace with the host's deploy step (e.g. flyctl deploy, ssh + compose pull) when one is picked.
+      # Deploys must run the one-shot migrate service (alembic upgrade head) before starting api.
       - run: echo "::warning::No staging host configured. Images pushed as tree-${{ needs.build.outputs.tree }} and staging."
 
   # Promotes the images staging built for this tree. Never rebuilds.
@@ -259,4 +260,5 @@ jobs:
           done
       # shortcut: no hosting target chosen yet; images are promoted but not deployed.
       # Replace with the host's deploy step when one is picked.
+      # Deploys must run the one-shot migrate service (alembic upgrade head) before starting api.
       - run: echo "::warning::No production host configured. Images tree-${{ env.TREE }} promoted to production."

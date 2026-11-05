@@ -20,6 +20,8 @@ make api                        # http://localhost:8000/health
 make web                        # http://localhost:5173
 ```
 
+On Windows, `make api` (`fastapi dev`) works as is. Without reload (`fastapi run` or plain `uvicorn`), run `uvicorn app.main:app --loop asyncio:SelectorEventLoop --no-proxy-headers`. psycopg async refuses the default Proactor loop (ADR 0005), and `--no-proxy-headers` stops plain uvicorn from trusting `X-Forwarded-For` from 127.0.0.1 before `TRUSTED_PROXIES` applies.
+
 ## Quality gate
 ```bash
 make check   # lint, format, typecheck, all tests (needs `make db`)

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from functools import lru_cache
 from ipaddress import ip_network
 from typing import Annotated, Any, Literal, Self
@@ -14,6 +15,15 @@ _MIN_AUTH_SECRET_LENGTH = 32
 
 UploadTypes = Annotated[list[str], NoDecode]
 Networks = Annotated[list[str], NoDecode]
+Tier = Literal["guest", "user"]
+
+
+@dataclass(frozen=True)
+class TierLimits:
+    max_upload_mb: int
+    upload_types: list[str]
+    max_docs: int
+    chat_messages_per_hour: int
 
 
 def _split_csv(value: Any) -> list[str]:
@@ -72,6 +82,25 @@ class Settings(BaseSettings):
     @property
     def upload_max_bytes_user(self) -> int:
         return self.upload_max_mb_user * _MIB
+
+    @property
+    def cookie_secure(self) -> bool:
+        return self.public_base_url.startswith("https://")
+
+    def limits(self, tier: Tier) -> TierLimits:
+        if tier == "guest":
+            return TierLimits(
+                self.upload_max_mb_guest,
+                self.upload_types_guest,
+                self.max_docs_guest,
+                self.chat_messages_per_hour_guest,
+            )
+        return TierLimits(
+            self.upload_max_mb_user,
+            self.upload_types_user,
+            self.max_docs_user,
+            self.chat_messages_per_hour_user,
+        )
 
     @field_validator("upload_types_guest", "upload_types_user", mode="before")
     @classmethod

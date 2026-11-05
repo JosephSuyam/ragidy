@@ -24,7 +24,7 @@ migrate: ## Apply DB migrations (needs make db)
 	cd apps/api && uv run alembic upgrade head
 
 api: ## Run the API with reload on :8000
-	cd apps/api && uv run fastapi dev app/main.py
+	cd apps/api && uv run fastapi dev app/main.py --no-proxy-headers
 
 web: ## Run the web dev server on :5173
 	cd apps/web && npm run dev
