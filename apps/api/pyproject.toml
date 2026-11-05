@@ -5,6 +5,13 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.1",
     "fastapi[standard]>=0.162.0",
+    "langchain-anthropic>=1.7.10",
+    "langchain-core>=1.7.6",
+    "langchain-ollama>=1.1.0",
+    "langchain-openai>=1.7.4",
+    "llama-index-core>=0.14.25",
+    "llama-index-embeddings-ollama>=0.10.0",
+    "llama-index-embeddings-openai>=0.7.0",
     "psycopg[binary]>=3.3.8",
     "pydantic-settings>=2.16.2",
     "sqlalchemy>=2.1.8",
@@ -29,7 +36,14 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 strict = true
 packages = ["app"]
 
+[[tool.mypy.overrides]]
+# These LlamaIndex integrations ship no py.typed marker; analyze their typed source anyway.
+module = ["llama_index.embeddings.openai.*", "llama_index.embeddings.ollama.*"]
+follow_untyped_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["integration: needs Postgres or network; skipped by check.py --fast"]
+# Silences the pytest-asyncio warning; the plugin arrives via llama-index-embeddings-ollama.
+asyncio_default_fixture_loop_scope = "function"

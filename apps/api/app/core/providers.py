@@ -1,0 +1,63 @@
+from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models import BaseChatModel
+from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
+from llama_index.core.base.embeddings.base import BaseEmbedding
+from llama_index.embeddings.ollama import OllamaEmbedding
+from llama_index.embeddings.openai import OpenAIEmbedding
+from pydantic import SecretStr
+
+from app.core.config import Settings
+
+# Hosted APIs only; Ollama keeps library defaults because a CPU model can exceed 60 s.
+MAX_RETRIES = 2
+# LlamaIndex applies this twice (client retry and its own wrapper), so 1 means at most 2 requests.
+EMBED_MAX_RETRIES = 1
+TIMEOUT_SECONDS = 60.0
+
+
+def _require(key: SecretStr, key_name: str, provider_setting: str, provider: str) -> SecretStr:
+    if not key.get_secret_value():
+        raise ValueError(f"{key_name} is required when {provider_setting}={provider}")
+    return key
+
+
+def get_chat_model(settings: Settings) -> BaseChatModel:
+    match settings.llm_provider:
+        case "anthropic":
+            return ChatAnthropic(
+                model_name=settings.llm_model,
+                api_key=_require(
+                    settings.anthropic_api_key, "ANTHROPIC_API_KEY", "LLM_PROVIDER", "anthropic"
+                ),
+                max_retries=MAX_RETRIES,
+                timeout=TIMEOUT_SECONDS,
+                stop=None,  # mypy reads the aliased stop_sequences field as required
+            )
+        case "openai":
+            return ChatOpenAI(
+                model=settings.llm_model,
+                api_key=_require(
+                    settings.openai_api_key, "OPENAI_API_KEY", "LLM_PROVIDER", "openai"
+                ),
+                max_retries=MAX_RETRIES,
+                timeout=TIMEOUT_SECONDS,
+            )
+        case "ollama":
+            return ChatOllama(model=settings.llm_model, base_url=settings.ollama_base_url)
+
+
+def get_embed_model(settings: Settings) -> BaseEmbedding:
+    match settings.embed_provider:
+        case "openai":
+            key = _require(settings.openai_api_key, "OPENAI_API_KEY", "EMBED_PROVIDER", "openai")
+            return OpenAIEmbedding(
+                model=settings.embed_model,
+                api_key=key.get_secret_value(),
+                max_retries=EMBED_MAX_RETRIES,
+                timeout=TIMEOUT_SECONDS,
+            )
+        case "ollama":
+            return OllamaEmbedding(
+                model_name=settings.embed_model, base_url=settings.ollama_base_url
+            )
