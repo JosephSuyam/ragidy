@@ -2852,7 +2852,7 @@ dependencies = [
     { name = "llama-index-embeddings-openai" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
-    { name = "sqlalchemy" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
 [package.dev-dependencies]
@@ -2876,7 +2876,7 @@ requires-dist = [
     { name = "llama-index-embeddings-openai", specifier = ">=0.7.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.8" },
     { name = "pydantic-settings", specifier = ">=2.16.2" },
-    { name = "sqlalchemy", specifier = ">=2.1.8" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.1.8" },
 ]
 
 [package.metadata.requires-dev]

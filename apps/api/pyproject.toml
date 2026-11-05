@@ -14,7 +14,7 @@ dependencies = [
     "llama-index-embeddings-openai>=0.7.0",
     "psycopg[binary]>=3.3.8",
     "pydantic-settings>=2.16.2",
-    "sqlalchemy>=2.1.8",
+    "sqlalchemy[asyncio]>=2.1.8",
 ]
 
 [dependency-groups]
