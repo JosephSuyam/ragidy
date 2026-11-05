@@ -20,11 +20,7 @@ POSITIVE_INT_FIELDS = [
     "chat_messages_per_hour_user",
 ]
 
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in Settings.model_fields:
-        monkeypatch.delenv(name.upper(), raising=False)
+pytestmark = pytest.mark.usefixtures("clean_env")
 
 
 def load() -> Settings:
@@ -172,3 +168,13 @@ def test_oauth_fully_configured_loads(monkeypatch: pytest.MonkeyPatch, provider:
     monkeypatch.setenv(f"OAUTH_{provider.upper()}_CLIENT_SECRET", "secret")
     settings = load()
     assert getattr(settings, f"oauth_{provider}_client_id") == "id"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("llm_provider", "UNKNOWNLLM"), ("embed_provider", "UNKNOWNEMBED")]
+)
+def test_unknown_provider_rejected(monkeypatch: pytest.MonkeyPatch, field: str, value: str) -> None:
+    monkeypatch.setenv(field.upper(), value)
+    with pytest.raises(ValidationError, match=only_error_on(field)) as exc:
+        load()
+    assert value not in str(exc.value)
