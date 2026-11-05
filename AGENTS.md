@@ -15,7 +15,7 @@ Pipeline: **chunk → embed → index → retrieve → generate**.
 - **CI/CD:** GitHub Actions, Docker images on GHCR
 - **Users (MVP):** guests get a private, expiring cookie session with no account; registered users sign in with email + password or Google/GitHub OAuth. Upload limits, file types, and document caps are configurable per tier (ADR 0003, `docs/architecture/requirements.md`). `features/workspaces` stays a reserved placeholder.
 
-**Hard rule:** LlamaIndex code lives only in `app/rag/`, and LangChain/LangGraph code lives only in `app/agents/`. Only plain data (`RetrievedChunk`: text, score, metadata) crosses between them. See `docs/architecture/overview.md`.
+**Hard rule:** LlamaIndex code lives only in `app/rag/`, and LangChain/LangGraph code lives only in `app/agents/`. Only plain data (`RetrievedChunk`: text, score, metadata) crosses between them. One exception: `app/core/providers.py` may import LangChain and LlamaIndex model classes only to construct them (ADR 0004). See `docs/architecture/overview.md`.
 
 ## Layout
 ```

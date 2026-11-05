@@ -39,6 +39,7 @@ Finish MVP step 2 (guest + register/login, per-tier limits), merge it, then plan
 
 ## Known gaps
 - `infrastructure/docker/api.Dockerfile` does not copy `alembic/` or `alembic.ini`, and no deploy step runs `upgrade head`; fix before the first DB-backed route.
+- Linux Docker: api service needs `extra_hosts: ["host.docker.internal:host-gateway"]` for Ollama on the host (deployment step 14).
 - Still open from earlier: `/api` proxy (Vite + web container) and `--no-proxy-headers` (step 14); SeaweedFS internal-port hardening before the public guest tier.
 
 ## Files touched

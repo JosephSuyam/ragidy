@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-11-04
 - Amends: [0001](0001-stack-and-scope.md) (Store: Postgres no longer holds all state)
+- Amended: 2026-11-05 (retry wording: no `.with_retry`, see [0004](0004-provider-factory.md))
 
 ## Context
 Ingestion needs the original file: a failed job retries from it, and a new embedding model needs a re-index from it. ADR 0001 keeps all state in one Postgres database, but it does not say where raw uploads live or how an ingestion job reaches a worker. Ingestion is slow (parse, embed), so it must not run inside the request.

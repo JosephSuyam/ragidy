@@ -1,6 +1,6 @@
 from functools import lru_cache
 from ipaddress import ip_network
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import PositiveInt, SecretStr, field_validator, model_validator
@@ -27,10 +27,13 @@ class Settings(BaseSettings):
     # Errors hide input so str(exc) never leaks secrets; exc.errors() still has it: never log that.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
-    llm_provider: str = "anthropic"
+    llm_provider: Literal["anthropic", "openai", "ollama"] = "anthropic"
     llm_model: str = "claude-sonnet-5-5"
-    embed_provider: str = "openai"
+    embed_provider: Literal["openai", "ollama"] = "openai"
     embed_model: str = "text-embedding-3-small"
+    anthropic_api_key: SecretStr = SecretStr("")
+    openai_api_key: SecretStr = SecretStr("")
+    ollama_base_url: str = "http://localhost:11434"
     database_url: str = "postgresql+psycopg://ragidy:ragidy@localhost:5432/ragidy"
     s3_endpoint_url: str = "http://localhost:8333"
     s3_bucket: str = "ragidy"
