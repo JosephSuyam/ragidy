@@ -39,6 +39,8 @@ More diagrams: [diagrams.md](diagrams.md).
 
 **Layering:** `api/routes` → `services`; `services` and `workers` (own process) → (`rag` | `agents` | `repositories` | `core`) → `models`. Routes never call `workers`. Nothing calls upward.
 
+**DB access:** request code uses async SQLAlchemy on psycopg 3, with one `AsyncSession` per request from `get_db()` in `app/core/db.py`. Services commit; the dependency only closes. On Windows, async entrypoints use `loop_factory=asyncio.SelectorEventLoop`. Alembic stays sync ([ADR 0005](../decisions/0005-request-db-access.md)).
+
 ## Providers
 `app/core/providers.py` builds the models from `Settings` (`LLM_PROVIDER`/`LLM_MODEL`, `EMBED_PROVIDER`/`EMBED_MODEL`) ([ADR 0004](../decisions/0004-provider-factory.md)):
 - `get_chat_model(settings) -> BaseChatModel`: `anthropic`, `openai` or `ollama`.
