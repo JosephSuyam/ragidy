@@ -1,5 +1,18 @@
 name: ragidy
 
+# Shared by api and migrate, so migrations run with the same image and env as the app.
+x-api: &api
+  profiles: [app]
+  build:
+    context: ../..
+    dockerfile: infrastructure/docker/api.Dockerfile
+  env_file:
+    - path: ../../apps/api/.env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy
+    S3_ENDPOINT_URL: http://seaweedfs:8333
+
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -42,19 +55,20 @@ services:
 
   # Full stack from the production images: make up
   api:
-    profiles: [app]
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/api.Dockerfile
-    env_file:
-      - path: ../../apps/api/.env
-        required: false
-    environment:
-      DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy
-      S3_ENDPOINT_URL: http://seaweedfs:8333
+    <<: *api
     ports:
       - "8000:8000"
     # shortcut: api does not wait for seaweedfs; add depends_on service_healthy when the storage client lands.
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # One-shot: applies Alembic migrations with the api image, then exits; api starts only after it succeeds.
+  migrate:
+    <<: *api
+    command: ["alembic", "upgrade", "head"]
     depends_on:
       db:
         condition: service_healthy
