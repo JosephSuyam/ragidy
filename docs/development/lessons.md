@@ -8,12 +8,14 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - On Windows, run async DB entrypoints with `loop_factory=asyncio.SelectorEventLoop` (`TestClient(backend_options=...)`, `asyncio.run(..., loop_factory=...)`, `uvicorn --loop asyncio:SelectorEventLoop`), because psycopg async refuses the default ProactorEventLoop and `fastapi run` returns 500 on every DB route. (api, 2026-11-05)
 - Set LlamaIndex `OpenAIEmbedding(max_retries=1)` for at most 2 requests, never assume one retry layer, because it applies `max_retries` twice (OpenAI client retry plus its own tenacity wrapper). (api, 2026-11-05)
 - Never log, `repr` or serialize (`to_dict`, `to_json`) a LlamaIndex `OpenAIEmbedding`, because it stores `api_key` as a plain str, not `SecretStr`. (api, 2026-11-05)
+- Hash or verify passwords (argon2) before the request's first DB query, or commit the read transaction first, because the pooled connection otherwise idles in a transaction during the hash and about 15 concurrent logins exhaust the pool. (api, 2026-11-06)
 
 ## Web
 
 ## Tests
 - Test S3 endpoints with boto3, never `curl --aws-sigv4` from curl older than 7.86, because old curl omits `x-amz-content-sha256`, so valid credentials get `SignatureDoesNotMatch`. (tests, 2026-11-04)
 - Before debugging an integration test that fails with `password authentication failed for user "ragidy"`, run `netstat -ano | rg :5432`, because a native Windows Postgres service on :5432 shadows the Docker `ragidy-db-1` port. (tests, 2026-11-05)
+- Run `docker ps` before integration tests and start `make db` if `ragidy-db-1` is not up, because with Postgres down they hang for more than 180 s with no output instead of failing. (tests, 2026-11-06)
 
 ## Docs
 - Write diagram labels as the step name first, then its folder in parentheses (`Services (app/services)`), and name folders only, never files that do not exist yet, because mixed label formats and phantom paths mislead readers. (docs, 2026-11-04)

@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.1",
+    "argon2-cffi>=25.1.0",
     "fastapi[standard]>=0.162.0",
     "langchain-anthropic>=1.7.10",
     "langchain-core>=1.7.6",

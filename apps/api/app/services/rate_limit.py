@@ -1,7 +1,12 @@
 import threading
 import time
 from collections import deque
+from functools import lru_cache
 from ipaddress import IPv4Address, IPv6Network, ip_address
+from math import ceil
+
+from app.core.config import get_settings
+from app.core.errors import AppError
 
 
 def ip_key(host: str | None) -> str:
@@ -41,12 +46,16 @@ class SlidingWindow:
                 for stale_key in list(self._hits):
                     if not _prune(self._hits[stale_key], cutoff):
                         del self._hits[stale_key]
-            stamps = self._hits.setdefault(key, deque())
-            _prune(stamps, cutoff)
+            stamps = _prune(self._hits.setdefault(key, deque()), cutoff)
             if len(stamps) >= limit:
                 return stamps[0] + self._window_s - now
             stamps.append(now)
             return None
+
+    def discard(self, key: str) -> None:
+        """Forget every hit recorded for `key`."""
+        with self._lock:
+            self._hits.pop(key, None)
 
     def clear(self) -> None:
         with self._lock:
@@ -61,3 +70,19 @@ def _prune(stamps: deque[float], cutoff: float) -> deque[float]:
 
 
 guest_creations = SlidingWindow(3600)
+auth_requests = SlidingWindow(60)
+
+
+@lru_cache
+def login_failures() -> SlidingWindow:
+    """Failed logins keyed `f"{email}|{ip_key}"`; built on first use so settings are loaded."""
+    return SlidingWindow(get_settings().login_failure_window_minutes * 60)
+
+
+def rate_limited(retry_after: float) -> AppError:
+    return AppError(
+        429,
+        "rate_limited",
+        "Too many requests; try again later",
+        {"Retry-After": str(ceil(retry_after))},
+    )

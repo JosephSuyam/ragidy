@@ -26,13 +26,19 @@ ADR 0001 ships a single user with no auth. The MVP now has two tiers: guests wit
 - **Auth SaaS (Auth0, Clerk and others):** less code, but a paid external dependency, user data outside our Postgres, and guests still need our own cookie sessions.
 - **Separate API origin with CORS:** no proxy, but credentialed CORS, cross-site cookies (`SameSite=None`) and a second origin to check.
 - **One shared guest space:** simplest, but every guest sees every other guest's documents.
-- **Picking the OAuth library here:** deferred to code. Authlib or a few `httpx` calls both fit; this ADR fixes the flow and its checks.
+- **Picking the OAuth library here:** deferred to code, then settled in the step 7 addendum (direct `httpx` calls). This ADR fixes the flow and its checks.
 
 ## Consequences
-- New dependency: `argon2-cffi`. The OAuth client may add one more.
+- New dependency: `argon2-cffi`. The OAuth client adds none (step 7 addendum).
 - The guest tier is public and anonymous, so the deferred SeaweedFS port hardening in ADR 0002 must land before any exposed deployment.
 - shortcut: rate-limit and chat counters live in memory per API process, so they reset on restart and only work with one API process; move them to Postgres before running more than one API process. The owner row lock works across processes.
 - The chat counter starts fresh after guest-to-user migration. This is accepted.
 - Behind the web container, `TRUSTED_PROXIES` must list it, or every client shares one rate-limit key.
 - Retrieval stays plain data: services pass the owner's document ids to `app/rag`, which needs no owner field in vector metadata.
 - `docs/api/README.md` and `packages/shared-types` get the endpoints in requirements.md when they are built.
+
+## Addendum: step 7 (2026-11-06)
+- **OAuth client: direct `httpx` calls, not Authlib.** This settles the deferred library choice. Each provider flow is one token POST plus one or two identity GETs, and PKCE `S256` plus the HMAC-SHA256-signed `ragidy_oauth` cookie (`{state, verifier, provider, exp}`, keyed with `AUTH_SECRET`, `Max-Age=600`) take a few standard-library lines. `httpx` is already a dependency, and identity still comes from the provider API over TLS, so no ID-token validation is needed. Trade-off: we own this small flow instead of reusing tested third-party code, so it is tested with `httpx.MockTransport`.
+- **Cookie prefix: `__Host-` is deferred.** It requires `Secure`, which is omitted on `http` dev, so cookie names would differ by scheme. With one origin, the exact `Origin` check (`403 origin_mismatch` on POST, PUT, PATCH and DELETE) already blocks writes from sibling subdomains. Revisit before deploying under a shared parent domain.
+- **Two PRs.** 7a: password register, login and logout, the `ragidy_session` cookie, the origin check, the `401 session_expired` owner lock and guest-to-user migration (R2, R3, R5, R6). 7b: Google and GitHub OAuth (R4).
+- **No new migration.** Migration 0001 already has `users.password`, `sessions` and `oauth_accounts`. The only new dependency is `argon2-cffi`; the OAuth client adds none.
