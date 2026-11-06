@@ -20,3 +20,10 @@ class UserResponse(BaseModel):
 
     id: UUID
     email: str
+
+
+class ProviderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str

@@ -15,6 +15,7 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 ## Tests
 - Test S3 endpoints with boto3, never `curl --aws-sigv4` from curl older than 7.86, because old curl omits `x-amz-content-sha256`, so valid credentials get `SignatureDoesNotMatch`. (tests, 2026-11-04)
 - Before debugging an integration test that fails with `password authentication failed for user "ragidy"`, run `netstat -ano | rg :5432`, because a native Windows Postgres service on :5432 shadows the Docker `ragidy-db-1` port. (tests, 2026-11-05)
+- Build signed or time-limited test values (cookies, tokens) inside the test body, never in `pytest.mark.parametrize` arguments, because parametrize runs at collection and the values can expire before the case runs (an `exp=now+600` OAuth cookie). (tests, 2026-11-06)
 - Run `docker ps` before integration tests and start `make db` if `ragidy-db-1` is not up, because with Postgres down they hang for more than 180 s with no output instead of failing. (tests, 2026-11-06)
 
 ## Docs

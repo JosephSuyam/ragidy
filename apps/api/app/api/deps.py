@@ -10,6 +10,7 @@ from app.services.rate_limit import ip_key
 
 GUEST_COOKIE = "ragidy_guest"
 SESSION_COOKIE = "ragidy_session"
+OAUTH_COOKIE = "ragidy_oauth"
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 

@@ -29,3 +29,7 @@ async def get_session_user(db: AsyncSession, token_hash: bytes) -> User | None:
 
 async def delete_session(db: AsyncSession, token_hash: bytes) -> None:
     await db.execute(delete(Session).where(Session.token == token_hash))
+
+
+async def delete_user_sessions(db: AsyncSession, user_id: UUID) -> None:
+    await db.execute(delete(Session).where(Session.user_id == user_id))
