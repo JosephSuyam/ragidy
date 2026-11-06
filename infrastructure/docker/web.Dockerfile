@@ -6,7 +6,7 @@ RUN npm ci
 COPY apps/web ./
 RUN npm run build
 
-# shortcut: default nginx config has no SPA fallback; add try_files when apps/web gets client-side routes.
 FROM nginxinc/nginx-unprivileged:alpine
+COPY infrastructure/docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080

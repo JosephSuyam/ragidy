@@ -12,6 +12,10 @@ x-api: &api
   environment:
     DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy
     S3_ENDPOINT_URL: http://seaweedfs:8333
+    # The browser origin is the web container (port 8080 below), which proxies /api/* to the api.
+    PUBLIC_BASE_URL: http://localhost:8080
+    # Only the web container's fixed address, so each client keeps its own rate-limit key.
+    TRUSTED_PROXIES: 10.80.80.10
 
 services:
   db:
@@ -58,6 +62,7 @@ services:
     <<: *api
     ports:
       - "8000:8000"
+    networks: [default, proxy]
     # shortcut: api does not wait for seaweedfs; add depends_on service_healthy when the storage client lands.
     depends_on:
       db:
@@ -80,8 +85,18 @@ services:
       dockerfile: infrastructure/docker/web.Dockerfile
     ports:
       - "8080:8080"
+    networks:
+      proxy:
+        ipv4_address: 10.80.80.10
     depends_on:
       - api
+
+# Its own network, so the fixed subnet never forces the default network (and db) to be recreated.
+networks:
+  proxy:
+    ipam:
+      config:
+        - subnet: 10.80.80.0/24
 
 volumes:
   pgdata:
