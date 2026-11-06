@@ -31,18 +31,18 @@ All cookies (`ragidy_session`, `ragidy_guest` and `ragidy_oauth`) are `HttpOnly;
 - [x] A client IP key (see Security) may create `GUEST_CREATE_PER_IP_PER_HOUR` guests an hour. Over that, the write returns `429 rate_limited` with `Retry-After` and creates no guest.
 
 ### R2 Register with email and password
-- [ ] Given a new email and a password of 8 to 128 characters, when `POST /auth/register` is called, then it returns `201`, creates the user and a session, and sets `ragidy_session`.
-- [ ] The email is trimmed and lowercased. An email that already exists, including on an OAuth-only account, returns `409 email_taken`. `users.email` has a unique index on the normalized email (it is stored normalized, enforced by a CHECK, under a plain unique constraint), so a concurrent duplicate registration also returns `409 email_taken`.
-- [ ] A password outside 8 to 128 characters returns `422`.
-- [ ] The stored hash starts with `$argon2id$`.
-- [ ] The session is issued as in R3.
-- [ ] Guest data migrates (R6).
+- [x] Given a new email and a password of 8 to 128 characters, when `POST /auth/register` is called, then it returns `201`, creates the user and a session, and sets `ragidy_session`.
+- [x] The email is trimmed and lowercased. An email that already exists, including on an OAuth-only account, returns `409 email_taken`. `users.email` has a unique index on the normalized email (it is stored normalized, enforced by a CHECK, under a plain unique constraint), so a concurrent duplicate registration also returns `409 email_taken`.
+- [x] A password outside 8 to 128 characters returns `422`.
+- [x] The stored hash starts with `$argon2id$`.
+- [x] The session is issued as in R3.
+- [x] Guest data migrates (R6).
 
 ### R3 Log in with email and password
-- [ ] Given valid credentials, when `POST /auth/login` is called, then it returns `200`, deletes the incoming session row if there is one, and sets `ragidy_session` to a newly generated token. A planted session cookie therefore never becomes logged in (no session fixation). Register (R2) and the OAuth callback (R4) issue sessions the same way.
-- [ ] A wrong password, an unknown email, and an account without a password all return the same `401 invalid_credentials`.
-- [ ] When the stored hash uses outdated parameters, a successful login rehashes it.
-- [ ] Guest data migrates (R6).
+- [x] Given valid credentials, when `POST /auth/login` is called, then it returns `200`, deletes the incoming session row if there is one, and sets `ragidy_session` to a newly generated token. A planted session cookie therefore never becomes logged in (no session fixation). Register (R2) and the OAuth callback (R4) issue sessions the same way.
+- [x] A wrong password, an unknown email, and an account without a password all return the same `401 invalid_credentials`.
+- [x] When the stored hash uses outdated parameters, a successful login rehashes it.
+- [x] Guest data migrates (R6).
 
 Account enumeration is accepted: `409 email_taken` (R2) already reveals whether an email exists. The rate limits in Security bound it.
 
@@ -59,14 +59,14 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [ ] Adding a provider needs only its config and one provider entry in `app/core`: a test registers a fake entry and runs start and callback against it.
 
 ### R5 Log out
-- [ ] Given a session, when `POST /auth/logout` is called, then it returns `204`, deletes the session row and clears the cookie (`Max-Age=0`).
-- [ ] The old token no longer resolves to the user. Logout without a session also returns `204`.
+- [x] Given a session, when `POST /auth/logout` is called, then it returns `204`, deletes the session row and clears the cookie (`Max-Age=0`).
+- [x] The old token no longer resolves to the user. Logout without a session also returns `204`.
 
 ### R6 Guest to user migration
-- [ ] Given a guest with documents and chats, when register or any login succeeds, then in the same transaction, after `SELECT ... FOR UPDATE` on the guest's `owners` row, every guest document and chat moves to the user, the guest row is deleted, and `ragidy_guest` is cleared.
+- [x] Given a guest with documents and chats, when register or any login succeeds, then in the same transaction, after `SELECT ... FOR UPDATE` on the guest's `owners` row, every guest document and chat moves to the user, the guest row is deleted, and `ragidy_guest` is cleared.
 - [ ] Moved documents keep their id, status, object and vectors; moved chats keep their full history; a `pending` document still reaches `ready`.
 - [ ] Migration ignores `MAX_DOCS_USER`. A user over the cap keeps every document, and further uploads return `409 document_limit_reached` until they delete enough.
-- [ ] If the guest's `owners` row is already gone at `FOR UPDATE` (the purge won the race), there is nothing to migrate and the login succeeds. Only a failure while moving existing rows fails the login, and then nothing moves.
+- [x] If the guest's `owners` row is already gone at `FOR UPDATE` (the purge won the race), there is nothing to migrate and the login succeeds. Only a failure while moving existing rows fails the login, and then nothing moves.
 - [ ] An upload, URL, chat-creation or message request that reaches its insert after the guest's `owners` row was deleted by the migration returns `401 session_expired` and leaves no row or object (R9, R12).
 
 ### R7 Upload size and types per tier
@@ -158,14 +158,14 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 ## Non-functional requirements
 
 ### Security
-- [ ] Passwords are hashed with argon2id (`argon2-cffi` defaults); plain passwords are never logged or stored. Hash and verify run in a threadpool behind a fixed concurrency cap (an internal constant, not config), because each call is CPU-bound and takes about 64 MiB.
+- [x] Passwords are hashed with argon2id (`argon2-cffi` defaults); plain passwords are never logged or stored. Hash and verify run in a threadpool behind a fixed concurrency cap (an internal constant, not config), because each call is CPU-bound and takes about 64 MiB.
 - [ ] Rate limits: `POST /auth/register` and `POST /auth/login` allow `RATE_LIMIT_AUTH_PER_MINUTE` requests a minute per client IP key. Login allows `LOGIN_MAX_FAILURES` failures per `LOGIN_FAILURE_WINDOW_MINUTES` minutes per (email, client IP key), so an attacker on another IP cannot lock out a victim. Guest creation (R1) and chat messages (R12) have their own limits. Excess returns `429 rate_limited` with `Retry-After`.
   shortcut: the counters live in memory per API process, so they reset on restart and only work with one API process; move them to Postgres before running more than one API process.
   Each check prunes expired windows, so keys built from random emails or rotated IPs do not grow memory without limit.
   The chat counter is keyed by owner, so it starts fresh after the guest-to-user migration (R6). This is accepted.
 - [ ] Client IP: the socket peer address by default. Forwarded headers count only when the peer is in `TRUSTED_PROXIES`; empty (the default) trusts no proxy. `app/main.py` adds uvicorn's `ProxyHeadersMiddleware` with `trusted_hosts` set to the normalized `TRUSTED_PROXIES` strings (for example `10.0.0.0/8`, `192.168.1.1/32`), because the middleware takes strings (no new dependency). The API runs with `--no-proxy-headers`, because uvicorn's own handling trusts `127.0.0.1` by default, so `TRUSTED_PROXIES` is the only source of trust. A test shows that a spoofed `X-Forwarded-For` from an untrusted peer does not change the key. Behind the web container, set `TRUSTED_PROXIES` to its address, or all clients share one key.
 - [ ] Rate-limit IP key: every per-IP limit (guest creation, auth requests, login failures) keys an IPv4 client by its full address and an IPv6 client by its `/64` prefix, because one IPv6 client controls a whole `/64` and could rotate through it. An IPv4-mapped IPv6 peer (`::ffff:a.b.c.d`) is first unwrapped with `ipaddress.IPv6Address.ipv4_mapped` and keyed by that full IPv4 address. The key function never raises: ASGI allows `scope["client"]` to be `None`, so a missing peer is keyed by one shared key, `"unknown"`, and a peer host that is not a valid IP (Starlette's TestClient sends `"testclient"`) is keyed by its raw host string. The test `test_non_ip_peer_keyed_without_error` shows that both cases return a key and raise no error. The test `test_ipv6_same_64_shares_counter` shows that two requests from different addresses in the same IPv6 `/64` share one counter. The test `test_ipv4_mapped_keyed_as_ipv4` shows that a mapped peer shares a counter with the same IPv4 address, and not with other IPv4 clients.
-- [ ] CSRF: cookies are `SameSite=Lax`, and middleware in `app/api/middleware` rejects every POST, PUT, PATCH and DELETE whose `Origin` header is missing or differs from the origin of `PUBLIC_BASE_URL`, with `403 origin_mismatch`. The comparison is an exact string match against the normalized `PUBLIC_BASE_URL` (Configurability).
+- [x] CSRF: cookies are `SameSite=Lax`, and middleware in `app/api/middleware` rejects every POST, PUT, PATCH and DELETE whose `Origin` header is missing or differs from the origin of `PUBLIC_BASE_URL`, with `403 origin_mismatch`. The comparison is an exact string match against the normalized `PUBLIC_BASE_URL` (Configurability).
 - [ ] Owner isolation: every repository function for documents and chats that routes or services call takes `owner_id` and puts it in the `WHERE` clause. The worker queries (claim, startup reset, status updates of status, attempts and error, object-key reads by document id, purge) are the only exemptions, named as such and called only from `app/workers`. Retrieval gets only the owner's document ids as plain data. A two-owner test covers read, retry, delete and chat citations.
 - [ ] SSRF: URL fetching follows ADR 0002 (http(s) only, no private, loopback or link-local IPs on the connected address or any redirect hop, timeout, size cap).
 - [ ] At startup, a provider with a client id but no client secret, any enabled provider with an empty `AUTH_SECRET`, or a set `AUTH_SECRET` shorter than 32 characters fails with an error that names the setting.
