@@ -23,7 +23,7 @@ async def register(
 ) -> tuple[User, str]:
     """Create a password user and its session; returns the user and the raw session token."""
     _limit_auth_requests(ip_key)
-    email = _normalize(email)
+    email = normalize_email(email)
     # Hashed before any query, so no pooled connection idles in a transaction during argon2.
     password_hash = await hash_password(password)
     if await users.get_user_by_email(db, email) is not None:
@@ -49,7 +49,7 @@ async def login(
     """Check a password and start a new session; returns the user and the raw session token."""
     _limit_auth_requests(ip_key)
     try:
-        email = _normalize(email)
+        email = normalize_email(email)
     except ValueError as exc:
         raise _invalid_credentials() from exc
     failures = login_failures()
@@ -111,7 +111,7 @@ def _limit_auth_requests(ip_key: str) -> None:
         raise rate_limited(retry_after)
 
 
-def _normalize(email: str) -> str:
+def normalize_email(email: str) -> str:
     """The stored form of an email; the same EmailStr validation for register and login.
 
     Raises ValueError when `email` is not a valid address.
