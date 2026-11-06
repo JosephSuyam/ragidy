@@ -40,3 +40,4 @@ make fast    # same, without integration tests
 - Contributing: `CONTRIBUTING.md`
 - Agent and Claude Code workflow: `AGENTS.md`, `CLAUDE.md`, `docs/development/workflow.md`
 - Architecture: `docs/architecture/overview.md`, diagrams in `docs/architecture/diagrams.md`
+- MVP roadmap: `docs/development/roadmap.md`
