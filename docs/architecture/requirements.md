@@ -201,7 +201,7 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 ### Privacy
 - [ ] A guest's documents, objects, vectors, chats and checkpoints are purged after `GUEST_TTL_DAYS` (R10), and hidden from the moment the guest expires.
 - [ ] Deleting a document or chat removes its object, vectors and checkpoint thread, not only the row (R14).
-- [ ] Logs never contain passwords, tokens, cookie values or OAuth codes.
+- [x] Logs never contain passwords, tokens, cookie values or OAuth codes.
 
 ## Folder ownership
 - Routes: `app/api/routes`. Origin check: `app/api/middleware`. `ProxyHeadersMiddleware` setup: `app/main.py`. In-memory rate-limit counters: `app/services`.

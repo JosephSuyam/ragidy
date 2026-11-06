@@ -30,9 +30,19 @@ class OAuthProvider:
     credentials: Callable[[Settings], tuple[str, SecretStr]]
 
 
+def _provider_user_id(value: Any, *, allow_int: bool = False) -> str:
+    # A null or empty id would map every such sign-in to one shared identity.
+    if isinstance(value, str) and value:
+        return value
+    if allow_int and isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    raise ValueError("invalid provider id")
+
+
 def _google_identity(bodies: list[Any]) -> Identity:
     info = bodies[0]
-    return Identity(str(info["sub"]), info.get("email"), info.get("email_verified") is True)
+    sub = _provider_user_id(info["sub"])
+    return Identity(sub, info.get("email"), info.get("email_verified") is True)
 
 
 def _github_identity(bodies: list[Any]) -> Identity:
@@ -41,7 +51,7 @@ def _github_identity(bodies: list[Any]) -> Identity:
         (e for e in emails if e.get("primary") is True and e.get("verified") is True), None
     )
     email = primary["email"] if primary else None
-    return Identity(str(user["id"]), email, email is not None)
+    return Identity(_provider_user_id(user["id"], allow_int=True), email, email is not None)
 
 
 PROVIDERS: dict[str, OAuthProvider] = {

@@ -12,7 +12,9 @@ from conftest import (
     EMAIL,
     ORIGIN,
     PASSWORD,
+    after_barrier,
     app_client,
+    concurrent_requests,
     count,
     leaking_tables,
     no_db,
@@ -27,7 +29,7 @@ from sqlalchemy import Engine, text
 
 from app.api.deps import GUEST_COOKIE, OAUTH_COOKIE, SESSION_COOKIE
 from app.core.config import get_settings
-from app.core.oauth import PROVIDERS, Identity, OAuthProvider
+from app.core.oauth import PROVIDERS, Identity, OAuthProvider, enabled
 from app.repositories import users
 from app.services import oauth
 from app.services.tokens import hash_token, sign, unsign
@@ -70,7 +72,8 @@ def provider_http(
     replies: dict[str, Any],
     seen: list[httpx.Request] | None = None,
 ) -> None:
-    """Fake the provider: each URL answers its JSON body or `httpx.Response`; others fail."""
+    """Fake the provider: each URL answers its JSON body or `httpx.Response`, or raises
+    its `httpx.TransportError` class; other URLs fail the test."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         # AssertionError, not KeyError: the service turns KeyError into provider_failed.
@@ -78,6 +81,8 @@ def provider_http(
         if seen is not None:
             seen.append(request)
         reply = replies[str(request.url)]
+        if isinstance(reply, type) and issubclass(reply, httpx.TransportError):
+            raise reply("provider unreachable", request=request)
         return reply if isinstance(reply, httpx.Response) else httpx.Response(200, json=reply)
 
     transport = httpx.MockTransport(handler)
@@ -321,6 +326,101 @@ def test_callback_bad_cookie_or_state_or_provider_error_redirects_oauth_failed(
     assert oauth_warnings(caplog) == [f"oauth callback failed: {reason}"]
 
 
+def assert_provider_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    provider: str,
+    replies: dict[str, Any],
+    reason: str,
+) -> None:
+    """A callback with a valid cookie and state fails with `reason` and touches no DB."""
+    caplog.set_level(logging.DEBUG)
+    provider_http(monkeypatch, replies)
+    with app_client(no_db) as client:
+        client.cookies.set(OAUTH_COOKIE, oauth_cookie(provider=provider))
+        response = callback(client, provider, **FULL)
+    assert_failed(response)
+    assert oauth_warnings(caplog) == [f"oauth callback failed: {reason}"]
+
+
+@pytest.mark.parametrize("error", [httpx.ConnectTimeout, httpx.ConnectError])
+@pytest.mark.parametrize("failing", ["token", "identity"])
+def test_callback_provider_timeout_redirects_oauth_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: type[httpx.TransportError],
+    failing: str,
+) -> None:
+    url = GITHUB.token_url if failing == "token" else GITHUB.identity_urls[0]
+    replies = {GITHUB.token_url: TOKEN_REPLY, url: error}
+    assert_provider_failed(
+        monkeypatch, caplog, "github", replies, f"provider_failed:{error.__name__}"
+    )
+
+
+MARKER = "provider-body-marker-3c9e"
+NOT_JSON = httpx.Response(200, text=f"<html>{MARKER}</html>")
+
+
+@pytest.mark.parametrize(
+    ("provider", "identity", "reason"),
+    [
+        pytest.param("google", [{"email": MARKER}], "KeyError", id="google_no_sub"),
+        pytest.param("google", [[MARKER]], "TypeError", id="google_list"),
+        pytest.param("google", [NOT_JSON], "JSONDecodeError", id="google_not_json"),
+        pytest.param(
+            "google",
+            [{"sub": None, "email": MARKER, "email_verified": True}],
+            "ValueError",
+            id="google_null_sub",
+        ),
+        pytest.param(
+            "github",
+            [{"login": MARKER}, [{"email": EMAIL, "primary": True, "verified": True}]],
+            "KeyError",
+            id="github_user_no_id",
+        ),
+        pytest.param(
+            "github", [{"id": 7}, {"message": MARKER}], "AttributeError", id="github_emails_dict"
+        ),
+        pytest.param("github", [{"id": 7}, 42], "TypeError", id="github_emails_number"),
+        pytest.param(
+            "github", [{"id": 7}, [MARKER, None]], "AttributeError", id="github_email_not_dict"
+        ),
+    ],
+)
+def test_callback_malformed_identity_redirects_oauth_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    provider: str,
+    identity: list[Any],
+    reason: str,
+) -> None:
+    entry = PROVIDERS[provider]
+    replies = {entry.token_url: TOKEN_REPLY} | dict(zip(entry.identity_urls, identity, strict=True))
+    assert_provider_failed(monkeypatch, caplog, provider, replies, f"provider_failed:{reason}")
+    assert not [r for r in caplog.records if r.exc_info or r.exc_text]
+    assert not [r for r in caplog.records if MARKER in r.getMessage()]
+
+
+def test_providers_empty_without_auth_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The settings validator rejects this env, so patch the cached object the app reads.
+    settings = get_settings()
+    monkeypatch.setattr(settings, "auth_secret", SecretStr(""))
+    assert settings.oauth_github_client_id
+    assert settings.oauth_google_client_id
+    assert enabled(settings) == []
+    with app_client(no_db) as client:
+        providers = client.get("/auth/providers")
+        start = client.get("/auth/oauth/github/start", follow_redirects=False)
+        client.cookies.set(OAUTH_COOKIE, oauth_cookie())
+        failed = callback(client, **FULL)
+    assert (providers.status_code, providers.json()) == (200, [])
+    assert (start.status_code, start.json()["code"]) == (404, "not_found")
+    assert OAUTH_COOKIE not in set_cookies(start)
+    assert_failed(failed)
+
+
 @pytest.mark.integration
 def test_verified_email_creates_user(
     client: TestClient, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
@@ -505,6 +605,42 @@ def test_callback_conflict_redirects_oauth_failed(
     assert oauth_warnings(caplog) == ["oauth callback failed: conflict"]
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize("verified", [True, False], ids=["email", "no_email"])
+def test_concurrent_callbacks_same_identity_one_user(
+    db_override: Callable[[], Any],
+    db_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    verified: bool,
+) -> None:
+    # Both lookups miss before either inserts; the unique email, or with no verified email
+    # the unique identity, makes the second insert wait for the first commit, then fail.
+    github_http(monkeypatch, uid=7, verified=verified)
+    lookup = after_barrier(users.get_user_by_identity)
+    monkeypatch.setattr(users, "get_user_by_identity", lookup)
+
+    def send_with(state: str) -> Callable[[httpx.AsyncClient], Any]:
+        async def send(client: httpx.AsyncClient) -> Response:
+            client.cookies.set(OAUTH_COOKIE, oauth_cookie(state=state))
+            return await client.get(
+                "/auth/oauth/github/callback", params={"code": CODE, "state": state}
+            )
+
+        return send
+
+    responses = concurrent_requests(db_override, send_with("state-a"), send_with("state-b"))
+
+    assert sorted(r.headers["location"] for r in responses) == sorted([SUCCESS, FAILED])
+    winner = next(r for r in responses if r.headers["location"] == SUCCESS)
+    loser = next(r for r in responses if r.headers["location"] == FAILED)
+    assert_failed(loser)
+    tables = ("owners", "users", "oauth_accounts", "sessions")
+    assert [count(db_engine, table) for table in tables] == [1, 1, 1, 1]
+    assert session_hashes(db_engine) == {hash_token(set_cookies(winner)[SESSION_COOKIE].value)}
+    assert oauth_warnings(caplog) == ["oauth callback failed: conflict"]
+
+
 FAKE = OAuthProvider(
     id="fake",
     name="Fake ID",
@@ -564,9 +700,13 @@ def test_callback_code_not_in_access_log() -> None:
         line = access_line(f"{path}?code={CODE}&state={STATE}")
         assert line == f'127.0.0.1:50000 - "GET {path} HTTP/1.1" 302'
     assert CODE not in access_line(f"/auth/oauth/google/callback?state=s&code={CODE}")
+    # GitHub accepts any redirect_uri under the registered one, so subpaths are callbacks too.
+    for path in ("/auth/oauth/github/callback/", "/api/auth/oauth/github/callback/deeper/x"):
+        assert access_line(f"{path}?code={CODE}") == f'127.0.0.1:50000 - "GET {path} HTTP/1.1" 302'
     for untouched in (
         "/api/auth/oauth/github/callback",
         "/api/auth/oauth/github/start?next=/chat",
+        "/health?probe=1",
         "/api/documents?q=/auth/oauth/x/callback?code=1",
     ):
         assert access_line(untouched) == f'127.0.0.1:50000 - "GET {untouched} HTTP/1.1" 302'

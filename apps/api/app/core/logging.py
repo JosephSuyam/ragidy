@@ -2,7 +2,8 @@ import logging
 import re
 
 # The OAuth callback query holds the authorization code, which logs must never contain.
-_OAUTH_CALLBACK = re.compile(r"^((?:/api)?/auth/oauth/[^/?]+/callback)\?.*$")
+# GitHub accepts any redirect_uri under the registered one, so match callback subpaths too.
+_OAUTH_CALLBACK = re.compile(r"^((?:/api)?/auth/oauth/[^/?]+/callback[^?]*)\?.*$")
 
 
 class _StripOAuthQuery(logging.Filter):

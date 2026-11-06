@@ -17,8 +17,10 @@ make db
 make migrate                    # apply DB migrations; needs make db
 make s3                         # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
 make api                        # http://localhost:8000/health
-make web                        # http://localhost:5173
+make web                        # http://localhost:5173; proxies /api/* to :8000
 ```
+
+`make up` runs the full stack from production images instead (needs `S3_*` in `apps/api/.env`). Open http://localhost:8080: the web container serves the app and proxies `/api/*` to the API. Compose sets `PUBLIC_BASE_URL=http://localhost:8080` and `TRUSTED_PROXIES=10.80.80.10` for that stack, on a fixed `proxy` network `10.80.80.0/24`. If that subnet clashes with a local network or VPN (Docker reports `Pool overlaps with other one on this address space`), change the subnet, the web `ipv4_address` and `TRUSTED_PROXIES` together in `infrastructure/docker/docker-compose.yml`.
 
 On Windows, `make api` (`fastapi dev`) works as is. Without reload (`fastapi run` or plain `uvicorn`), run `uvicorn app.main:app --loop asyncio:SelectorEventLoop --no-proxy-headers`. psycopg async refuses the default Proactor loop (ADR 0005), and `--no-proxy-headers` stops plain uvicorn from trusting `X-Forwarded-For` from 127.0.0.1 before `TRUSTED_PROXIES` applies.
 

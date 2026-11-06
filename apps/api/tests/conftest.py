@@ -1,11 +1,12 @@
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from http.cookies import Morsel, SimpleCookie
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from alembic.config import Config
 from fastapi import APIRouter, Request
@@ -175,6 +176,46 @@ def app_client(
     finally:
         app.dependency_overrides.clear()
         del app.router.routes[added:]
+
+
+def concurrent_requests(
+    get_db_override: Callable[[], AsyncIterator[Any]],
+    *sends: Callable[[httpx.AsyncClient], Awaitable[Response]],
+) -> list[Response]:
+    """Run each `send` at once on its own AsyncClient (own cookies, own DB session)."""
+    from app.main import app
+
+    async def run() -> list[Response]:
+        transport = httpx.ASGITransport(app=app)
+        clients = [
+            httpx.AsyncClient(
+                transport=transport, base_url="http://testserver", headers={"Origin": ORIGIN}
+            )
+            for _ in sends
+        ]
+        try:
+            return await asyncio.gather(*(send(c) for send, c in zip(sends, clients, strict=True)))
+        finally:
+            for c in clients:
+                await c.aclose()
+
+    app.dependency_overrides[get_db] = get_db_override
+    try:
+        return asyncio.run(run(), loop_factory=asyncio.SelectorEventLoop)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def after_barrier(fn: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+    """`fn`, then wait until 2 callers got there: all read before any writes."""
+    barrier = asyncio.Barrier(2)
+
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        result = await fn(*args, **kwargs)
+        await asyncio.wait_for(barrier.wait(), timeout=10)
+        return result
+
+    return wrapped
 
 
 @pytest.fixture(scope="session")
