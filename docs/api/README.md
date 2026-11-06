@@ -1,6 +1,6 @@
 # API
 
-Base URL in development: `http://localhost:8000`. FastAPI serves interactive docs at `/docs` and the OpenAPI schema at `/openapi.json`.
+Base URL in development: `http://localhost:8000`. The browser reaches the same paths under `/api` on the web origin (`http://localhost:5173/api` with `make web`, `http://localhost:8080/api` with `make up`), because the web server proxies `/api/*` to the API and strips the prefix. FastAPI serves interactive docs at `/docs` and the OpenAPI schema at `/openapi.json`.
 
 | Method | Path | Response | Notes |
 |---|---|---|---|
@@ -46,4 +46,5 @@ Add each new endpoint here: method, path, request, response, and error codes.
 - `ragidy_oauth` holds `{state, verifier, provider, exp}`, HMAC-signed with `AUTH_SECRET`. Attributes: as `ragidy_guest`, with `Max-Age=600`. The callback rejects it once `exp` passes.
 - Linking ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)): a known `(provider, provider user id)` signs in its user. Else a verified email that matches a user links to that user, and if that user has a password, the password is removed and its other sessions are deleted. Else a verified email creates a user, and no verified email creates a user without an email.
 - GitHub's email is the `/user/emails` entry that is `primary` and `verified`; Google's needs `email_verified`.
-- The API access log drops the callback query string, so the `code` is never logged. A failed callback logs a reason code only.
+- The provider user id must be a non-empty string (GitHub's may also be a number). Any other value fails the callback with `oauth_failed`, so a null or empty id never maps sign-ins to one shared identity.
+- The API access log drops the callback query string, so the `code` is never logged. The web container turns off its access and error log for the callback path, and the Vite dev server drops the query from the URL it logs on a proxy error. A failed callback logs a reason code only.
