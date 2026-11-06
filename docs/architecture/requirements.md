@@ -47,16 +47,16 @@ All cookies (`ragidy_session`, `ragidy_guest` and `ragidy_oauth`) are `HttpOnly;
 Account enumeration is accepted: `409 email_taken` (R2) already reveals whether an email exists. The rate limits in Security bound it.
 
 ### R4 Log in with Google or GitHub (OAuth / OpenID Connect)
-- [ ] `GET /auth/providers` lists exactly the providers whose client id is set.
-- [ ] `GET /auth/oauth/{provider}/start` returns `302` to the provider with `state`, a PKCE `S256` challenge and `redirect_uri = <PUBLIC_BASE_URL>/api/auth/oauth/{provider}/callback`. It sets `ragidy_oauth` with the cookie attributes in Tiers (`Secure` only on `https`), signed with `AUTH_SECRET`, which expires after 10 minutes and holds the state, the PKCE verifier and the provider. An unknown or disabled provider returns `404`.
-- [ ] Given a missing, expired or tampered `ragidy_oauth` cookie, a state mismatch, or a provider error, when the callback runs, then it redirects to `<PUBLIC_BASE_URL>/login?error=oauth_failed` and creates no session.
-- [ ] The identity (provider user id, email, email verified) comes from the provider over TLS with the access token: Google's userinfo `email_verified`, GitHub's `/user/emails` entry that is `primary` and `verified`.
-- [ ] The provider email is trimmed and lowercased before matching or storing.
-- [ ] Account linking follows ADR 0003: a known `(provider, provider user id)` logs in; else a verified email that matches a user links to that user; else a verified email creates a user with that email; else a user with no email is created.
-- [ ] Linking by verified email to a user that has a password removes the password and deletes that user's other sessions.
+- [x] `GET /auth/providers` lists exactly the providers whose client id is set.
+- [x] `GET /auth/oauth/{provider}/start` returns `302` to the provider with `state`, a PKCE `S256` challenge and `redirect_uri = <PUBLIC_BASE_URL>/api/auth/oauth/{provider}/callback`. It sets `ragidy_oauth` with the cookie attributes in Tiers (`Secure` only on `https`), signed with `AUTH_SECRET`, which expires after 10 minutes and holds the state, the PKCE verifier and the provider. An unknown or disabled provider returns `404`.
+- [x] Given a missing, expired or tampered `ragidy_oauth` cookie, a state mismatch, or a provider error, when the callback runs, then it redirects to `<PUBLIC_BASE_URL>/login?error=oauth_failed` and creates no session.
+- [x] The identity (provider user id, email, email verified) comes from the provider over TLS with the access token: Google's userinfo `email_verified`, GitHub's `/user/emails` entry that is `primary` and `verified`.
+- [x] The provider email is trimmed and lowercased before matching or storing.
+- [x] Account linking follows ADR 0003: a known `(provider, provider user id)` logs in; else a verified email that matches a user links to that user; else a verified email creates a user with that email; else a user with no email is created.
+- [x] Linking by verified email to a user that has a password removes the password and deletes that user's other sessions.
 - [ ] After linking, `GET /documents` and `GET /chats` list every document and chat of the account, including any added before linking. Accepted risk: a squatter's documents and chats stay in the account; these existing lists let the user find and delete them (R14).
-- [ ] Success redirects to `<PUBLIC_BASE_URL>/` with `ragidy_session` set, and guest data migrates (R6).
-- [ ] Adding a provider needs only its config and one provider entry in `app/core`: a test registers a fake entry and runs start and callback against it.
+- [x] Success redirects to `<PUBLIC_BASE_URL>/` with `ragidy_session` set, and guest data migrates (R6).
+- [x] Adding a provider needs only its config and one provider entry in `app/core`: a test registers a fake entry and runs start and callback against it.
 
 ### R5 Log out
 - [x] Given a session, when `POST /auth/logout` is called, then it returns `204`, deletes the session row and clears the cookie (`Max-Age=0`).

@@ -9,6 +9,9 @@ Base URL in development: `http://localhost:8000`. FastAPI serves interactive doc
 | POST | `/auth/register` | `201 {id, email}` | Body `{email, password}`: a valid email and a password of 8 to 128 characters. Sets `ragidy_session`. Errors: `409 email_taken`, `422`, `429 rate_limited` |
 | POST | `/auth/login` | `200 {id, email}` | Body `{email, password}`: email at most 254 characters, password at most 128, else `422`. Replaces the incoming session with a new one. Errors: `401 invalid_credentials`, `429 rate_limited` |
 | POST | `/auth/logout` | `204` | Deletes the session row and clears `ragidy_session` (`Max-Age=0`). Also `204` without a session |
+| GET | `/auth/providers` | `200 [{id, name}]` | Enabled OAuth providers: those with a client id set, and none when `AUTH_SECRET` is empty |
+| GET | `/auth/oauth/{provider}/start` | `302` to the provider | Authorization code with PKCE `S256`. `redirect_uri` is `<PUBLIC_BASE_URL>/api/auth/oauth/{provider}/callback`. Sets `ragidy_oauth`. Scopes: Google `openid email`, GitHub `user:email`. Errors: `404 not_found` for an unknown or disabled provider |
+| GET | `/auth/oauth/{provider}/callback` | `302 <PUBLIC_BASE_URL>/` | The provider redirects here with `code` and `state`. Sets `ragidy_session` like login and clears `ragidy_oauth`. Any failure redirects to `<PUBLIC_BASE_URL>/login?error=oauth_failed`, clears `ragidy_oauth`, and starts no session |
 
 Add each new endpoint here: method, path, request, response, and error codes.
 
@@ -35,6 +38,12 @@ Add each new endpoint here: method, path, request, response, and error codes.
 ## Session cookie
 - `ragidy_session` holds 32 random bytes, like `ragidy_guest`. The DB stores only its SHA-256 hash, in `sessions.token`.
 - Attributes: as `ragidy_guest`, with `Max-Age=SESSION_TTL_DAYS*86400`. No `__Host-` prefix ([ADR 0003](../decisions/0003-guest-and-user-accounts.md) addendum).
-- Register and login delete the incoming session row and set a new token, so a planted cookie never logs in.
-- When the request sends `ragidy_guest`, register and login clear it (`Max-Age=0`). In the same transaction, the guest's documents and chats move to the account and the guest is deleted. `MAX_DOCS_USER` is ignored for the move.
+- Register, login and the OAuth callback delete the incoming session row and set a new token, so a planted cookie never logs in.
+- When the request sends `ragidy_guest`, register, login and the OAuth callback clear it (`Max-Age=0`). In the same transaction, the guest's documents and chats move to the account and the guest is deleted. `MAX_DOCS_USER` is ignored for the move.
 - An unknown or expired session cookie counts as no session.
+
+## OAuth
+- `ragidy_oauth` holds `{state, verifier, provider, exp}`, HMAC-signed with `AUTH_SECRET`. Attributes: as `ragidy_guest`, with `Max-Age=600`. The callback rejects it once `exp` passes.
+- Linking ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)): a known `(provider, provider user id)` signs in its user. Else a verified email that matches a user links to that user, and if that user has a password, the password is removed and its other sessions are deleted. Else a verified email creates a user, and no verified email creates a user without an email.
+- GitHub's email is the `/user/emails` entry that is `primary` and `verified`; Google's needs `email_verified`.
+- The API access log drops the callback query string, so the `code` is never logged. A failed callback logs a reason code only.
