@@ -9,13 +9,13 @@ Pipeline: **chunk → embed → index → retrieve → generate**.
 - **API:** Python 3.12, FastAPI, uv (`apps/api`)
 - **Data and retrieval:** LlamaIndex (`app/rag`). It ingests, parses, chunks, embeds, indexes, retrieves, and reranks.
 - **Orchestration:** LangChain + LangGraph (`app/agents`). It handles workflows, conversational memory, tools, and state.
-- **Store:** Postgres + pgvector, for vectors, documents, chat history, and LangGraph checkpoints. Migrations use Alembic.
+- **Store:** Postgres + pgvector, for vectors, documents, chat history, LangGraph checkpoints, and the ingestion job queue (the `documents` row is the job, ADR 0002). SeaweedFS (any S3-compatible store in production) holds raw uploads and fetched URL content. Migrations use Alembic.
 - **LLM and embeddings:** pluggable through env vars (`LLM_PROVIDER`, `LLM_MODEL`, `EMBED_PROVIDER`, `EMBED_MODEL`), resolved only in `app/core/providers.py`.
 - **Web:** React + TypeScript (Vite), Tailwind CSS v4, shadcn/ui, oxlint, Vitest (`apps/web`)
 - **CI/CD:** GitHub Actions, Docker images on GHCR
-- **Users:** single user for now. `features/authentication` and `features/workspaces` are reserved placeholders (ADR 0001).
+- **Users (MVP):** guests get a private, expiring cookie session with no account; registered users sign in with email + password or Google/GitHub OAuth. Upload limits, file types, and document caps are configurable per tier (ADR 0003, `docs/architecture/requirements.md`). `features/workspaces` stays a reserved placeholder.
 
-**Hard rule:** LlamaIndex code lives only in `app/rag/`, and LangChain/LangGraph code lives only in `app/agents/`. Only plain data (`RetrievedChunk`: text, score, metadata) crosses between them. See `docs/architecture/overview.md`.
+**Hard rule:** LlamaIndex code lives only in `app/rag/`, and LangChain/LangGraph code lives only in `app/agents/`. Only plain data (`RetrievedChunk`: text, score, metadata) crosses between them. One exception: `app/core/providers.py` may import LangChain and LlamaIndex model classes only to construct them (ADR 0004). See `docs/architecture/overview.md`.
 
 ## Layout
 ```
@@ -24,7 +24,7 @@ apps/api/app/
   api/routes/        thin HTTP handlers          api/middleware/  request middleware
   core/              config, providers, logging
   schemas/           Pydantic request and response models
-  services/          use cases: routes → services → rag | agents | repositories
+  services/          use cases: routes → services → rag | agents | repositories | core
   repositories/      all DB queries              models/          SQLAlchemy models
   rag/               ingestion, parsers, chunking, embeddings, indexing, retrieval, reranking
   agents/            workflows (LangGraph), memory, tools, state
@@ -46,10 +46,12 @@ Empty folders hold a placeholder (`__init__.py` or `.gitkeep`) until their first
 ```bash
 make install        # uv sync + npm install
 make db             # Postgres + pgvector on :5432
+make s3             # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
+make migrate        # apply Alembic migrations; needs make db
 make api            # API on :8000 (reload)
 make web            # web on :5173
 make check          # full quality gate; `make fast` skips integration tests
-make up             # full stack from production images
+make up             # full stack from production images; needs S3_* in apps/api/.env
 ```
 Without `make`, run the commands in `Makefile` directly. The gate is `python infrastructure/scripts/check.py [--api|--web] [--fast]`.
 Code navigation: when `graphify-out/graph.json` exists, run `graphify query "<question>"` (or `path`, `explain`) before grepping or reading source, and `graphify update .` after code changes.
@@ -57,9 +59,9 @@ Add dependencies with `uv add` (in `apps/api`) or `npm install` (in `apps/web`).
 
 ## Conventions
 - KISS, DRY, YAGNI: build the smallest change that fully solves the task.
-- Layering: routes → services → (rag | agents | repositories) → models. Nothing calls upward.
+- Layering: `api/routes` → `services`; `services` and `workers` (own process) → (`rag` | `agents` | `repositories` | `core`) → `models`. Routes never call `workers`. Nothing calls upward.
 - Commits: `<type>(<scope>): <subject>`. Type is feature|fix|docs|style|refactor|test|chore|perf. The subject is imperative, 50 characters or fewer, with no period.
-- Branches: `<type>/<short-name>` from `main`. Never commit directly to `main`.
+- Branches: `<type>/<short-name>` from `develop`, merged by PR into `develop`, then promoted by PR `develop` → `staging` → `main`. Never commit directly to `develop`, `staging`, or `main`.
 - Never read or commit `.env` files or secrets.
 - Tests: mock LLMs and embeddings at `app/core/providers.py`. Mark tests that need Postgres or network with `@pytest.mark.integration`.
 - Every change passes `python infrastructure/scripts/check.py` before commit.

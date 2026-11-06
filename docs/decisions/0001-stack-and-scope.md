@@ -2,6 +2,11 @@
 
 - Status: accepted
 - Date: 2026-11-03
+- Amended: 2026-11-04 (delivery: branch flow and tree-hash promotion)
+- Amended: 2026-11-04 (store: raw files in object storage, see 0002)
+- Amended: 2026-11-04 (users: guest and registered tiers, see 0003)
+- Amended: 2026-11-05 (library split: providers exception, see [0004](0004-provider-factory.md))
+- Amended: 2026-11-05 (store: async request DB access, see [0005](0005-request-db-access.md))
 
 ## Context
 Ragidy lets a user upload a file or link and chat with it through RAG. We need to pick the stack and keep the first scope small.
@@ -13,7 +18,7 @@ Ragidy lets a user upload a file or link and chat with it through RAG. We need t
 - **Providers:** LLM and embedding providers are chosen through env vars and resolved in one factory (`app/core/providers.py`).
 - **Web:** React + TypeScript + Vite, Tailwind v4, shadcn/ui (radix, nova preset), oxlint, and Vitest.
 - **Users:** single user, no auth. `features/authentication` and `features/workspaces` exist as empty placeholders for later.
-- **Delivery:** GitHub Actions. Images go to GHCR. Staging deploys on merge to `main`, and production promotes the same image on a `v*` tag. The hosting target is not chosen yet.
+- **Delivery:** GitHub Actions (`pipeline.yml`) and GHCR. Branches flow `develop` → `staging` → `main` through PRs. A push to `staging` builds images tagged `tree-<git tree hash>` and deploys staging. A push to `main` promotes the same images to production without a rebuild, because the merge keeps the tree. Version tags only mark releases and do not deploy. The hosting target is not chosen yet.
 
 ## Alternatives
 - Node/TypeScript end to end: one language, but fewer loaders and retrievers.

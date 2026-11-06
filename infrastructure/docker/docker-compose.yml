@@ -1,5 +1,22 @@
 name: ragidy
 
+# Shared by api and migrate, so migrations run with the same image and env as the app.
+x-api: &api
+  profiles: [app]
+  build:
+    context: ../..
+    dockerfile: infrastructure/docker/api.Dockerfile
+  env_file:
+    - path: ../../apps/api/.env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy
+    S3_ENDPOINT_URL: http://seaweedfs:8333
+    # The browser origin is the web container (port 8080 below), which proxies /api/* to the api.
+    PUBLIC_BASE_URL: http://localhost:8080
+    # Only the web container's fixed address, so each client keeps its own rate-limit key.
+    TRUSTED_PROXIES: 10.80.80.10
+
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -17,19 +34,46 @@ services:
       interval: 5s
       retries: 10
 
-  # Full stack from the production images: docker compose --profile app up --build
-  api:
-    profiles: [app]
-    build:
-      context: ../..
-      dockerfile: infrastructure/docker/api.Dockerfile
-    env_file:
-      - path: ../../apps/api/.env
-        required: false
+  # S3 object storage. With no identity SeaweedFS allows anonymous access, so refuse to start without one.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.52@sha256:57877e32bb90073b37dc109b438ba66e84fd5ed9ced5f5c04f56444ef243ce59
     environment:
-      DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$$AWS_ACCESS_KEY_ID" ] || [ -z "$$AWS_SECRET_ACCESS_KEY" ]; then
+          echo "seaweedfs: S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set; refusing to start with anonymous access" >&2
+          exit 1
+        fi
+        exec /entrypoint.sh server -s3
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - seaweedfs_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      retries: 20
+
+  # Full stack from the production images: make up
+  api:
+    <<: *api
     ports:
       - "8000:8000"
+    networks: [default, proxy]
+    # shortcut: api does not wait for seaweedfs; add depends_on service_healthy when the storage client lands.
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # One-shot: applies Alembic migrations with the api image, then exits; api starts only after it succeeds.
+  migrate:
+    <<: *api
+    command: ["alembic", "upgrade", "head"]
     depends_on:
       db:
         condition: service_healthy
@@ -41,8 +85,19 @@ services:
       dockerfile: infrastructure/docker/web.Dockerfile
     ports:
       - "8080:8080"
+    networks:
+      proxy:
+        ipv4_address: 10.80.80.10
     depends_on:
       - api
 
+# Its own network, so the fixed subnet never forces the default network (and db) to be recreated.
+networks:
+  proxy:
+    ipam:
+      config:
+        - subnet: 10.80.80.0/24
+
 volumes:
   pgdata:
+  seaweedfs_data:

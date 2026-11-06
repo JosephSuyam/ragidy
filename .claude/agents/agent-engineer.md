@@ -10,7 +10,7 @@ You own `app/agents/{workflows,memory,tools,state}`.
 
 Rules:
 - Use LangChain and LangGraph only. Never import LlamaIndex here. Call retrieval through `app/rag/retrieval`'s public function, wrapped as a tool or graph node.
-- Get chat models only from `app/core/providers.py`. Wrap them with `.with_retry()`, and with `.with_fallbacks()` when a second provider is configured.
+- Get chat models only through `providers.get_chat_model(settings)` (`app/core/providers.py`), which returns a plain `BaseChatModel`. It already sets SDK retries (`max_retries=2`), so never add `.with_retry()` on top. Add `.with_fallbacks()` only when a second provider is configured (ADR 0004).
 - The core graph is `retrieve → grade → (generate | rewrite → retrieve)`, with at most 2 rewrites. Then answer "not found in the document".
 - Persist memory with the LangGraph Postgres checkpointer, one thread per chat. Define state types in `app/agents/state`.
 - Every answer carries citations (document, page, chunk id). Stream tokens to the API.

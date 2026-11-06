@@ -1,0 +1,264 @@
+name: Pipeline
+
+# One run per push to develop, staging, or main. Pull requests trigger nothing.
+# develop: gate. staging: gate, build tree-<tree hash> images, deploy staging.
+# main: gate, promote the staging-built tree-<tree hash> images to production. Never rebuilds.
+
+on:
+  push:
+    branches: [develop, staging, main]
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC: catch newly published CVEs
+  workflow_dispatch:
+
+concurrency:
+  group: pipeline-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Full gate against a real Postgres + pgvector: lint, format, typecheck, unit, integration, root tests/.
+  api:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    services: &db-services
+      db:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: ragidy
+          POSTGRES_PASSWORD: ragidy
+          POSTGRES_DB: ragidy
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragidy"
+          --health-interval 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: &db-url postgresql+psycopg://ragidy:ragidy@localhost:5432/ragidy
+    steps:
+      - uses: actions/checkout@v4
+      - run: &db-init psql "postgresql://ragidy:ragidy@localhost:5432/ragidy" -f infrastructure/database/init.sql
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - run: uv sync --locked
+        working-directory: apps/api
+      - run: python infrastructure/scripts/check.py --api
+
+  # e2e: add a Playwright job here when tests/e2e gets its first test.
+
+  web:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+        working-directory: apps/web
+      - run: python infrastructure/scripts/check.py --web --fast
+      - run: npm run build
+        working-directory: apps/web
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Audit locked runtime Python dependencies
+        working-directory: apps/api
+        run: |
+          uv export --locked --no-dev --no-hashes --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit --strict -r "$RUNNER_TEMP/requirements.txt"
+      # !cancelled(): one red scan must not hide the others; the job still fails.
+      - name: Audit runtime Node dependencies
+        if: ${{ !cancelled() }}
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high
+      # The gitleaks action scans only the pushed range with --no-merges, which is empty for a merge commit.
+      # shortcut: full-history scan every run, switch to github.event.before..github.sha when history makes it slow
+      - name: Scan full git history for secrets
+        if: ${{ !cancelled() }}
+        env:
+          GITLEAKS_VERSION: 8.24.3
+          GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -sSfL -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --verbose .
+
+  # Self-annealing: on a red push, Claude follows .claude/skills/debugging (CI section),
+  # pushes the fix to fix/autofix-<short sha>, and opens a PR into develop.
+  autofix:
+    needs: [api, web, security]
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+      id-token: write
+    # Same Postgres as api, so Claude can reproduce the full gate, integration tests included.
+    services: *db-services
+    env:
+      DATABASE_URL: *db-url
+      HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - if: env.HAS_KEY != 'true'
+        run: echo "ANTHROPIC_API_KEY not set; skipping autofix."
+      - id: guard
+        if: env.HAS_KEY == 'true'
+        run: |
+          branch="fix/autofix-${GITHUB_SHA::7}"
+          open=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json headRefName,isCrossRepository \
+            --jq '[.[] | select((.isCrossRepository | not) and (.headRefName | startswith("fix/autofix-")))] | length')
+          if [ "$open" -gt 0 ]; then
+            echo "An autofix PR is already open; leaving it for a human."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --silent 2>/dev/null; then
+            echo "Branch $branch already exists (re-run?); leaving it for a human."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          fi
+      # Cut from develop, the fix PR's base, so staging/main merge commits stay out of it.
+      - if: steps.guard.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+      - if: steps.guard.outputs.run == 'true'
+        run: git switch -c "${{ steps.guard.outputs.branch }}"
+      - if: steps.guard.outputs.run == 'true'
+        run: *db-init
+      - if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.guard.outputs.run == 'true'
+        uses: astral-sh/setup-uv@v6
+      - if: steps.guard.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - if: steps.guard.outputs.run == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          prompt: |
+            Pipeline run ${{ github.run_id }} failed on ${{ github.ref_name }} at ${{ github.sha }}.
+            You are on branch ${{ steps.guard.outputs.branch }}, cut from origin/develop.
+            Fix the failing run per the CI section of .claude/skills/debugging/SKILL.md for that run id.
+            Never edit `.gitleaksignore` or weaken any check; if the failure is a leaked secret or an unpatched CVE, stop and leave it for a human.
+            Commit as `fix(ci): <subject>`, push branch ${{ steps.guard.outputs.branch }},
+            and open a PR with `gh pr create --base develop`.
+          claude_args: >-
+            --max-turns 40
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(gh run:*),Bash(gh pr:*),Bash(python infrastructure/scripts/check.py:*),Bash(uv:*),Bash(npm:*),Bash(npx:*),Bash(git:*)"
+
+  # Builds the images once per staging tree, tagged tree-<tree hash> and staging.
+  # A staging-to-main merge has the same tree, so deploy-production promotes these images.
+  build:
+    needs: [api, web, security]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        app: [api, web]
+    outputs:
+      tree: ${{ steps.tree.outputs.tree }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tree
+        run: echo "tree=$(git rev-parse HEAD^{tree})" >> "$GITHUB_OUTPUT"
+      - run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}-${{ matrix.app }}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infrastructure/docker/${{ matrix.app }}.Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:tree-${{ steps.tree.outputs.tree }}
+            ${{ env.IMAGE }}:staging
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      # shortcut: no hosting target chosen yet; images are pushed but not deployed.
+      # Replace with the host's deploy step (e.g. flyctl deploy, ssh + compose pull) when one is picked.
+      # Deploys must run the one-shot migrate service (alembic upgrade head) before starting api.
+      - run: echo "::warning::No staging host configured. Images pushed as tree-${{ needs.build.outputs.tree }} and staging."
+
+  # Promotes the images staging built for this tree. Never rebuilds.
+  deploy-production:
+    needs: [api, web, security]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Retag staging images as production
+        run: |
+          tree=$(git rev-parse HEAD^{tree})
+          echo "TREE=$tree" >> "$GITHUB_ENV"
+          # Check every image first so a missing one never leaves a half-promoted release.
+          for app in api web; do
+            image="ghcr.io/${GITHUB_REPOSITORY,,}-$app"
+            if ! docker buildx imagetools inspect "$image:tree-$tree" > /dev/null 2>&1; then
+              echo "::error::image tree-$tree not found; merge to staging first"
+              exit 1
+            fi
+          done
+          for app in api web; do
+            image="ghcr.io/${GITHUB_REPOSITORY,,}-$app"
+            docker buildx imagetools create -t "$image:production" "$image:tree-$tree"
+          done
+      # shortcut: no hosting target chosen yet; images are promoted but not deployed.
+      # Replace with the host's deploy step when one is picked.
+      # Deploys must run the one-shot migrate service (alembic upgrade head) before starting api.
+      - run: echo "::warning::No production host configured. Images tree-${{ env.TREE }} promoted to production."
