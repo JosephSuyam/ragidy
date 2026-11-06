@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
+from http.cookies import Morsel, SimpleCookie
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,8 @@ import pytest
 from alembic.config import Config
 from fastapi import APIRouter, Request
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, make_url, text
+from httpx import Response
+from sqlalchemy import Connection, Engine, create_engine, inspect, make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -18,15 +20,18 @@ from app.api.deps import DbSession, WriteOwner, client_ip_key
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.errors import AppError
-from app.services.rate_limit import guest_creations
+from app.services.owners import lock_write_owner
+from app.services.rate_limit import auth_requests, guest_creations, login_failures
 
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+ORIGIN = "http://localhost:5173"  # Settings.public_base_url default
 
 test_router = APIRouter(prefix="/_test")
 
 
 @test_router.post("/write")
 async def _write(owner: WriteOwner, db: DbSession) -> dict[str, str]:
+    await lock_write_owner(db, owner)
     await db.commit()
     return {"owner_id": str(owner.owner_id)}
 
@@ -39,6 +44,50 @@ async def _write_fail(owner: WriteOwner) -> None:
 @test_router.get("/ip")
 async def _ip(request: Request) -> dict[str, str]:
     return {"key": client_ip_key(request)}
+
+
+EMAIL = "alice@example.com"
+PASSWORD = "correct horse battery"
+
+
+def write(client: TestClient) -> Response:
+    response = client.post("/_test/write")
+    assert response.status_code == 200, response.text
+    return response
+
+
+def register(client: TestClient, email: str = EMAIL, password: str = PASSWORD) -> Response:
+    response = client.post("/auth/register", json={"email": email, "password": password})
+    assert response.status_code == 201, response.text
+    return response
+
+
+def count(db_engine: Engine, table: str) -> int:
+    with db_engine.connect() as conn:
+        return conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()
+
+
+def set_cookies(response: Response) -> dict[str, Morsel[str]]:
+    """The response's Set-Cookie headers, by cookie name."""
+    cookies: SimpleCookie = SimpleCookie()
+    for header in response.headers.get_list("set-cookie"):
+        cookies.load(header)
+    return dict(cookies)
+
+
+def leaking_tables(conn: Connection, secret: str) -> list[str]:
+    """Tables with a row holding `secret`, or its bytes as bytea hex, in any column."""
+    return [
+        table
+        for table in inspect(conn).get_table_names()
+        if conn.execute(
+            text(
+                f"SELECT count(*) FROM {table} t WHERE strpos(t::text, :raw) > 0 "
+                "OR strpos(t::text, :hex) > 0"
+            ),
+            {"raw": secret, "hex": secret.encode().hex()},
+        ).scalar_one()
+    ]
 
 
 def alembic_config(url: str) -> Config:
@@ -80,11 +129,16 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def app_env(clean_env: None) -> Iterator[None]:
     """Fresh app settings from defaults plus monkeypatched env (never `.env`) and no rate hits."""
-    get_settings.cache_clear()
-    guest_creations.clear()
+    _reset_app_state()
     yield
+    _reset_app_state()
+
+
+def _reset_app_state() -> None:
     get_settings.cache_clear()
     guest_creations.clear()
+    auth_requests.clear()
+    login_failures.cache_clear()
 
 
 class _NoDb:
@@ -101,7 +155,10 @@ async def no_db() -> AsyncIterator[Any]:
 def app_client(
     get_db_override: Callable[[], AsyncIterator[Any]], **kwargs: Any
 ) -> Iterator[TestClient]:
-    """TestClient on the real app plus the `/_test` routes, with `get_db` overridden."""
+    """TestClient on the real app plus the `/_test` routes, with `get_db` overridden.
+
+    Requests carry `Origin: ORIGIN`; pass another per request when PUBLIC_BASE_URL changes.
+    """
     from app.main import app
 
     added = len(app.router.routes)
@@ -109,7 +166,10 @@ def app_client(
     app.dependency_overrides[get_db] = get_db_override
     try:
         with TestClient(
-            app, backend_options={"loop_factory": asyncio.SelectorEventLoop}, **kwargs
+            app,
+            backend_options={"loop_factory": asyncio.SelectorEventLoop},
+            headers={"Origin": ORIGIN},
+            **kwargs,
         ) as client:
             yield client
     finally:
@@ -131,7 +191,10 @@ def db_engine(db_url: str) -> Iterator[Engine]:
 
 
 @pytest.fixture
-def client(db_url: str, db_engine: Engine, app_env: None) -> Iterator[TestClient]:
+def db_override(
+    db_url: str, db_engine: Engine, app_env: None
+) -> Callable[[], AsyncIterator[AsyncSession]]:
+    """A `get_db` override on the emptied test database, for tests that need several clients."""
     with db_engine.begin() as conn:
         conn.execute(text("TRUNCATE owners CASCADE"))
     sessions = async_sessionmaker(
@@ -142,5 +205,10 @@ def client(db_url: str, db_engine: Engine, app_env: None) -> Iterator[TestClient
         async with sessions() as session:
             yield session
 
-    with app_client(test_db) as test_client:
+    return test_db
+
+
+@pytest.fixture
+def client(db_override: Callable[[], AsyncIterator[AsyncSession]]) -> Iterator[TestClient]:
+    with app_client(db_override) as test_client:
         yield test_client

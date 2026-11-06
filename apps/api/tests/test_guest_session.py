@@ -3,9 +3,10 @@ from datetime import datetime, timedelta
 from http.cookies import SimpleCookie
 
 import pytest
+from conftest import count, leaking_tables, write
 from fastapi.testclient import TestClient
 from httpx import Response
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Engine, text
 
 from app.api.deps import GUEST_COOKIE
 from app.services.tokens import new_token
@@ -15,19 +16,8 @@ pytestmark = pytest.mark.integration
 TTL_DAYS = 7  # Settings.guest_ttl_days default
 
 
-def write(client: TestClient) -> Response:
-    response = client.post("/_test/write")
-    assert response.status_code == 200, response.text
-    return response
-
-
 def guest_cookie(response: Response) -> str:
     return response.cookies[GUEST_COOKIE]
-
-
-def count(db_engine: Engine, table: str) -> int:
-    with db_engine.connect() as conn:
-        return conn.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()
 
 
 def test_first_write_creates_guest_and_sets_cookie(client: TestClient, db_engine: Engine) -> None:
@@ -51,7 +41,9 @@ def test_cookie_secure_on_https_base_url(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://app.example.com")
-    morsel = SimpleCookie(write(client).headers["set-cookie"])[GUEST_COOKIE]
+    response = client.post("/_test/write", headers={"Origin": "https://app.example.com"})
+    assert response.status_code == 200, response.text
+    morsel = SimpleCookie(response.headers["set-cookie"])[GUEST_COOKIE]
     assert morsel["secure"] is True
 
 
@@ -67,16 +59,7 @@ def test_guest_row_stores_only_token_hash(client: TestClient, db_engine: Engine)
     with db_engine.connect() as conn:
         stored = conn.execute(text("SELECT token FROM guests")).scalar_one()
         assert stored == hashlib.sha256(raw.encode()).digest()
-        for table in inspect(conn).get_table_names():
-            # Row-to-text: the raw token, or its bytes as bytea hex, in any column.
-            leaks = conn.execute(
-                text(
-                    f"SELECT count(*) FROM {table} t WHERE strpos(t::text, :raw) > 0 "
-                    "OR strpos(t::text, :hex) > 0"
-                ),
-                {"raw": raw, "hex": raw.encode().hex()},
-            ).scalar_one()
-            assert leaks == 0, table
+        assert leaking_tables(conn, raw) == []
 
 
 @pytest.mark.parametrize("cookie_kind", ["unknown", "expired"])
@@ -141,7 +124,7 @@ def test_guest_creation_over_limit_returns_429_and_creates_no_guest(
     assert response.status_code == 429
     assert response.json() == {
         "code": "rate_limited",
-        "detail": "Too many guest sessions from this address; try again later",
+        "detail": "Too many requests; try again later",
     }
     assert 0 < int(response.headers["retry-after"]) <= 3600
     assert "set-cookie" not in response.headers
