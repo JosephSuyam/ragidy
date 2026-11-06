@@ -6,12 +6,15 @@ from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 from argon2 import PasswordHasher
 from conftest import (
     EMAIL,
     PASSWORD,
+    after_barrier,
     app_client,
+    concurrent_requests,
     count,
     leaking_tables,
     no_db,
@@ -146,6 +149,26 @@ def test_register_concurrent_duplicate_409(
     assert response.json() == EMAIL_TAKEN
     assert "set-cookie" not in response.headers
     assert (count(db_engine, "users"), count(db_engine, "owners")) == (1, 1)
+
+
+@pytest.mark.integration
+def test_concurrent_registrations_same_email_one_user(
+    db_override: GetDb, db_engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Both pre-checks see no user before either inserts, so the unique email decides.
+    monkeypatch.setattr(users, "get_user_by_email", after_barrier(users.get_user_by_email))
+
+    async def send(client: httpx.AsyncClient) -> Response:
+        return await client.post("/auth/register", json={"email": EMAIL, "password": PASSWORD})
+
+    responses = concurrent_requests(db_override, send, send)
+
+    assert sorted(r.status_code for r in responses) == [201, 409]
+    loser = next(r for r in responses if r.status_code == 409)
+    assert loser.json() == EMAIL_TAKEN
+    assert "set-cookie" not in loser.headers
+    assert (count(db_engine, "users"), count(db_engine, "owners")) == (1, 1)
+    assert count(db_engine, "sessions") == 1
 
 
 @pytest.mark.usefixtures("app_env")
@@ -338,6 +361,38 @@ def test_logout_without_session_204() -> None:
         response = client.post("/auth/logout")
     assert response.status_code == 204
     assert set_cookies(response)[SESSION_COOKIE]["max-age"] == "0"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("cookie", ["unknown", "expired"])
+def test_logout_with_unknown_or_expired_session_204(
+    client: TestClient, db_engine: Engine, cookie: str
+) -> None:
+    alice = register(client).cookies[SESSION_COOKIE]
+    client.cookies.clear()
+    bob = register(client, BOB).cookies[SESSION_COOKIE]
+    if cookie == "expired":
+        with db_engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE sessions SET expires_at = now() - interval '1 second' WHERE token = :t"
+                ),
+                {"t": hash_token(alice)},
+            )
+    use_only_cookie(client, SESSION_COOKIE, alice if cookie == "expired" else "no-such-token")
+
+    response = client.post("/auth/logout")
+
+    assert response.status_code == 204
+    morsel = set_cookies(response)[SESSION_COOKIE]
+    assert (morsel.value, morsel["max-age"]) == ("", "0")
+    with db_engine.connect() as conn:
+        tokens = set(conn.execute(text("SELECT token FROM sessions")).scalars())
+    # An expired row is deleted like a live one; an unknown token deletes nothing.
+    survivors = {hash_token(bob)} | ({hash_token(alice)} if cookie == "unknown" else set())
+    assert tokens == survivors
+    use_only_cookie(client, SESSION_COOKIE, bob)
+    assert client.get("/me").json()["email"] == BOB
 
 
 @pytest.mark.integration
