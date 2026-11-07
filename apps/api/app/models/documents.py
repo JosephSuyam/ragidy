@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, func, text
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,6 +37,28 @@ class Document(Base):
     attempts: Mapped[int] = mapped_column(server_default="0")
     run_after: Mapped[datetime] = mapped_column(server_default=func.now())
     created_at: Mapped[CreatedAt]
+
+
+class Chunk(Base):
+    """One embedded chunk of a document. The vector has no fixed dimension, so models can differ.
+
+    shortcut: exact cosine scan, fine for <=20 docs per owner; add a partial expression HNSW
+    index per model dimension when caps grow.
+    """
+
+    __tablename__ = "chunks"
+    # Also the index for filtering chunks by document.
+    __table_args__ = (UniqueConstraint("document_id", "position"),)
+
+    id: Mapped[UuidPk]
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
+    position: Mapped[int]
+    # `metadata` is reserved on declarative models.
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, server_default=text("'{}'::jsonb")
+    )
+    text: Mapped[str]
+    embedding: Mapped[list[float]] = mapped_column(Vector())
 
 
 class Chat(Base):
