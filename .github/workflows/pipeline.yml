@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  # Full gate against a real Postgres + pgvector: lint, format, typecheck, unit, integration, root tests/.
+  # Full gate against a real Postgres + pgvector and SeaweedFS S3: lint, format, typecheck, unit, integration, root tests/.
   api:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -40,6 +40,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: &db-init psql "postgresql://ragidy:ragidy@localhost:5432/ragidy" -f infrastructure/database/init.sql
+      # The compose seaweedfs service (as `make s3`) with test-only credentials, also exported to later steps.
+      - name: Start SeaweedFS S3
+        run: &s3-start |
+          s3_env="$RUNNER_TEMP/s3-test-only.env"
+          cat > "$s3_env" <<'EOF'
+          S3_ENDPOINT_URL=http://localhost:8333
+          S3_BUCKET=ragidy
+          S3_REGION=us-east-1
+          S3_ACCESS_KEY_ID=ci-test-only-access-key
+          S3_SECRET_ACCESS_KEY=ci-test-only-secret-key
+          EOF
+          cat "$s3_env" >> "$GITHUB_ENV"
+          docker compose --env-file "$s3_env" -f infrastructure/docker/docker-compose.yml up -d --wait seaweedfs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -118,7 +131,7 @@ jobs:
       pull-requests: write
       actions: read
       id-token: write
-    # Same Postgres as api, so Claude can reproduce the full gate, integration tests included.
+    # Same Postgres and SeaweedFS as api, so Claude can reproduce the full gate, integration tests included.
     services: *db-services
     env:
       DATABASE_URL: *db-url
@@ -153,6 +166,9 @@ jobs:
         run: git switch -c "${{ steps.guard.outputs.branch }}"
       - if: steps.guard.outputs.run == 'true'
         run: *db-init
+      - if: steps.guard.outputs.run == 'true'
+        name: Start SeaweedFS S3
+        run: *s3-start
       - if: steps.guard.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:

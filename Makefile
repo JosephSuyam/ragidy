@@ -29,7 +29,7 @@ api: ## Run the API with reload on :8000
 web: ## Run the web dev server on :5173
 	cd apps/web && npm run dev
 
-check: ## Full quality gate (needs `make db` for integration tests)
+check: ## Full quality gate (needs `make db` and `make s3` for integration tests)
 	$(CHECK)
 
 fast: ## Quality gate without integration tests
