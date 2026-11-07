@@ -17,6 +17,7 @@ make db
 make migrate                    # apply DB migrations; needs make db
 make s3                         # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
 make api                        # http://localhost:8000/health
+make worker                     # ingestion worker; needs make db, make s3, make migrate
 make web                        # http://localhost:5173; proxies /api/* to :8000
 ```
 

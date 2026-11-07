@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     trusted_proxies: Networks = []
     guest_create_per_ip_per_hour: PositiveInt = 10
     url_fetch_per_hour: PositiveInt = 20
+    document_retry_per_hour: PositiveInt = 10
     chat_messages_per_hour_guest: PositiveInt = 20
     chat_messages_per_hour_user: PositiveInt = 100
 

@@ -14,6 +14,9 @@ MAX_RETRIES = 2
 # LlamaIndex applies this twice (client retry and its own wrapper), so 1 means at most 2 requests.
 EMBED_MAX_RETRIES = 1
 TIMEOUT_SECONDS = 60.0
+# Without it, LlamaIndex sends every embed batch at once (about 25 OpenAI or 250 Ollama
+# requests for a 5 MB file).
+EMBED_WORKERS = 4
 
 
 def _require(key: SecretStr, key_name: str, provider_setting: str, provider: str) -> SecretStr:
@@ -56,8 +59,11 @@ def get_embed_model(settings: Settings) -> BaseEmbedding:
                 api_key=key.get_secret_value(),
                 max_retries=EMBED_MAX_RETRIES,
                 timeout=TIMEOUT_SECONDS,
+                num_workers=EMBED_WORKERS,
             )
         case "ollama":
             return OllamaEmbedding(
-                model_name=settings.embed_model, base_url=settings.ollama_base_url
+                model_name=settings.embed_model,
+                base_url=settings.ollama_base_url,
+                num_workers=EMBED_WORKERS,
             )

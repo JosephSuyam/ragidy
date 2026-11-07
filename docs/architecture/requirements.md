@@ -106,9 +106,9 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [ ] The same purge deletes expired sessions.
 
 ### R11 Ingestion status and retry
-- [ ] Upload and URL return `202` with the document and status `pending`. `GET /documents/{id}` shows `status`, `error` and `attempts`.
-- [ ] Status moves `pending → processing → ready | failed`, with 3 attempts in total (ADR 0002). A `failed` document has a non-empty `error`.
-- [ ] `POST /documents/{id}/retry` on a `failed` or `ready` document returns `202` with status `pending` and `attempts` 0. On `pending` or `processing` it returns `409 document_busy`.
+- [x] Upload and URL return `202` with the document and status `pending`. `GET /documents/{id}` shows `status`, `error` and `attempts`.
+- [x] Status moves `pending → processing → ready | failed`, with 3 attempts in total (ADR 0002). A `failed` document has a non-empty `error`.
+- [x] `POST /documents/{id}/retry` on a `failed` or `ready` document returns `202` with status `pending` and `attempts` 0. On `pending` or `processing` it returns `409 document_busy`. An owner may make `DOCUMENT_RETRY_PER_HOUR` retry attempts an hour; every attempt counts, and over that it returns `429 rate_limited` with `Retry-After`.
 - [ ] The UI shows each document's status and a retry action on `failed`.
 
 ### R12 Chat with citations
@@ -201,6 +201,7 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 | `TRUSTED_PROXIES` | empty | Comma-separated IPs or CIDRs whose forwarded headers count, normalized to network strings; empty ignores forwarded headers |
 | `GUEST_CREATE_PER_IP_PER_HOUR` | `10` | Guests one client IP key (IPv4 address or IPv6 `/64`) may create per hour |
 | `URL_FETCH_PER_HOUR` | `20` | URL fetch attempts per owner, or per client IP key with no owner yet, per hour |
+| `DOCUMENT_RETRY_PER_HOUR` | `10` | Document retry attempts per owner per hour; each retry re-embeds the whole document |
 | `CHAT_MESSAGES_PER_HOUR_GUEST` | `20` | Chat messages per guest per hour |
 | `CHAT_MESSAGES_PER_HOUR_USER` | `100` | Chat messages per user per hour |
 

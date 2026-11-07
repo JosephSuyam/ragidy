@@ -49,6 +49,7 @@ make db             # Postgres + pgvector on :5432
 make s3             # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
 make migrate        # apply Alembic migrations; needs make db
 make api            # API on :8000 (reload)
+make worker         # ingestion worker; needs make db, make s3, make migrate
 make web            # web on :5173
 make check          # full quality gate; `make fast` skips integration tests
 make up             # full stack from production images; needs S3_* in apps/api/.env
