@@ -71,6 +71,7 @@ def _prune(stamps: deque[float], cutoff: float) -> deque[float]:
 
 guest_creations = SlidingWindow(3600)
 auth_requests = SlidingWindow(60)
+url_fetches = SlidingWindow(3600)
 
 
 @lru_cache

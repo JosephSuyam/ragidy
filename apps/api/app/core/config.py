@@ -4,7 +4,7 @@ from ipaddress import ip_network
 from typing import Annotated, Any, Literal, Self
 from urllib.parse import urlsplit
 
-from pydantic import PositiveInt, SecretStr, field_validator, model_validator
+from pydantic import PositiveFloat, PositiveInt, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 SUPPORTED_UPLOAD_TYPES = frozenset({"pdf", "docx", "txt", "md", "html"})
@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     upload_types_user: UploadTypes = _DEFAULT_UPLOAD_TYPES
     max_docs_guest: PositiveInt = 3
     max_docs_user: PositiveInt = 20
+    url_fetch_timeout_seconds: PositiveFloat = 10
     guest_ttl_days: PositiveInt = 7
     session_ttl_days: PositiveInt = 30
 
@@ -72,6 +73,7 @@ class Settings(BaseSettings):
     login_failure_window_minutes: PositiveInt = 15
     trusted_proxies: Networks = []
     guest_create_per_ip_per_hour: PositiveInt = 10
+    url_fetch_per_hour: PositiveInt = 20
     chat_messages_per_hour_guest: PositiveInt = 20
     chat_messages_per_hour_user: PositiveInt = 100
 
