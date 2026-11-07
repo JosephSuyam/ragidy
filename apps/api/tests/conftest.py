@@ -1,8 +1,13 @@
 import asyncio
+import gzip
+import threading
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from http.cookies import Morsel, SimpleCookie
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +23,13 @@ from sqlalchemy.pool import NullPool
 
 from alembic import command
 from app.api.deps import DbSession, WriteOwner, client_ip_key
+from app.core import storage
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.errors import AppError
+from app.services import url_fetch
 from app.services.owners import lock_write_owner
-from app.services.rate_limit import auth_requests, guest_creations, login_failures
+from app.services.rate_limit import auth_requests, guest_creations, login_failures, url_fetches
 
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 ORIGIN = "http://localhost:5173"  # Settings.public_base_url default
@@ -140,6 +147,123 @@ def _reset_app_state() -> None:
     guest_creations.clear()
     auth_requests.clear()
     login_failures.cache_clear()
+    url_fetches.clear()
+    storage._client.cache_clear()
+
+
+Objects = dict[str, tuple[bytes, str]]
+
+
+@pytest.fixture
+def fake_storage(monkeypatch: pytest.MonkeyPatch) -> Objects:
+    """In-memory object store, `{key: (data, content_type)}`, in place of `app.core.storage`."""
+    objects: Objects = {}
+
+    async def put_object(key: str, data: bytes, content_type: str) -> None:
+        objects[key] = (data, content_type)
+
+    async def delete_object(key: str) -> None:
+        objects.pop(key, None)
+
+    monkeypatch.setattr(storage, "put_object", put_object)
+    monkeypatch.setattr(storage, "delete_object", delete_object)
+    return objects
+
+
+NOTES_MD = b"# Notes\n"
+
+
+class _Handler(BaseHTTPRequestHandler):
+    """Routes for URL fetch tests; sizes and hop counts come from the last path segment."""
+
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:
+        path, _, query = self.path.partition("?")
+        arg = path.rsplit("/", 1)[-1]
+        if path.startswith("/redirect/"):
+            hops = int(arg)
+            if hops:
+                self._send(302, b"", Location=f"/redirect/{hops - 1}")
+            else:
+                self._send(200, b"done")
+        elif path == "/to":
+            self._send(302, b"", Location=query.removeprefix("url="))
+        elif path == "/host":
+            self._send(200, self.headers["Host"].encode())
+        elif path.startswith("/identity/"):
+            # Each hop answers 400 unless the request asked for an uncompressed body.
+            hops = int(arg)
+            if self.headers["Accept-Encoding"] != "identity":
+                self._send(400, b"compression offered")
+            elif hops:
+                self._send(302, b"", Location=f"/identity/{hops - 1}")
+            else:
+                self._send(200, b"done")
+        elif path == "/gzip":
+            self._send(200, gzip.compress(b"a" * 10), **{"Content-Encoding": "gzip"})
+        elif path == "/notes.md":
+            self._send(200, NOTES_MD)
+        elif path.startswith("/bytes/"):
+            self._send(200, b"a" * int(arg))
+        elif path.startswith("/claims/"):
+            # Announces `arg` bytes and sends none: only a Content-Length check can return 413.
+            self.send_response(200)
+            self.send_header("Content-Length", arg)
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+        elif path.startswith("/chunked/"):
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for _ in range(int(arg)):
+                self.wfile.write(b"1\r\na\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+        elif path == "/slow":
+            time.sleep(2)
+            self._send(200, b"late")
+        else:
+            self._send(404, b"not found")
+
+    def _send(self, status: int, body: bytes, **headers: str) -> None:
+        self.send_response(status)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+class _QuietServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        pass  # clients that stop reading early (413, timeouts) reset the connection
+
+
+@pytest.fixture
+def http_server() -> Iterator[str]:
+    """A local HTTP server on 127.0.0.1; yields its base URL. Tests never hit the internet."""
+    server = _QuietServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture
+def allow_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let `fetch_url` reach loopback (the local test server); other private IPs stay blocked."""
+    allowed = url_fetch._is_allowed
+
+    def is_allowed(ip: IPv4Address | IPv6Address) -> bool:
+        return ip.is_loopback or allowed(ip)
+
+    monkeypatch.setattr(url_fetch, "_is_allowed", is_allowed)
 
 
 class _NoDb:

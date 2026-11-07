@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.1",
     "argon2-cffi>=25.1.0",
+    "boto3>=1.43.126",
     "fastapi[standard]>=0.162.0",
     "httpx>=0.28.1",
     "langchain-anthropic>=1.7.10",
@@ -25,6 +26,7 @@ dev = [
     "mypy>=2.4.1",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
+    "types-boto3[s3]>=1.43.126",
 ]
 
 [tool.ruff]

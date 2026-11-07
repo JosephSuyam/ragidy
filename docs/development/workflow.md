@@ -31,7 +31,7 @@ CI is one workflow, `.github/workflows/pipeline.yml` (`Pipeline`). PRs trigger n
 
 `security` gates `build` and `deploy-production`, so a secret finding or an unpatched CVE blocks deploys. To fix a secret finding, rotate the secret, then add its fingerprint to `.gitleaksignore` by hand in a reviewed PR.
 
-- `api` runs `check.py --api` with Postgres, integration tests included. `web` runs the web gate plus the build. `security` runs pip-audit, npm audit, and a full-history gitleaks scan.
+- `api` runs `check.py --api` with Postgres and SeaweedFS, integration tests included. `web` runs the web gate plus the build. `security` runs pip-audit, npm audit, and a full-history gitleaks scan.
 - Images are tagged with the git tree hash. The `staging` → `main` merge has the same tree as `staging`, so production gets exactly the image staging tested.
 - `autofix`: on a red push, it cuts `fix/autofix-<short sha>` from `origin/develop`, fixes the failure with the `debugging` skill, and opens a PR into `develop`. It needs the `ANTHROPIC_API_KEY` secret and the repo setting "Allow GitHub Actions to create and approve pull requests" (Settings → Actions → General → Workflow permissions). It skips when that branch already exists or an autofix PR is already open.
 - Run a full secret scan by hand: `gh workflow run pipeline.yml --ref main`.

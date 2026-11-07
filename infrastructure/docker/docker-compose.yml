@@ -63,9 +63,10 @@ services:
     ports:
       - "8000:8000"
     networks: [default, proxy]
-    # shortcut: api does not wait for seaweedfs; add depends_on service_healthy when the storage client lands.
     depends_on:
       db:
+        condition: service_healthy
+      seaweedfs:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully

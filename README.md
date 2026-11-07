@@ -26,9 +26,11 @@ On Windows, `make api` (`fastapi dev`) works as is. Without reload (`fastapi run
 
 ## Quality gate
 ```bash
-make check   # lint, format, typecheck, all tests (needs `make db`)
+make check   # lint, format, typecheck, all tests (needs `make db` and `make s3`)
 make fast    # same, without integration tests
 ```
+
+The storage integration test also needs the `S3_*` values exported in your shell, because tests never read `.env`.
 
 ## Repository layout
 - `apps/api`: FastAPI service (RAG in `app/rag`, agents in `app/agents`)
