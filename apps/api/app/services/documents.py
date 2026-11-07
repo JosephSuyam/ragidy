@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
@@ -10,9 +10,15 @@ from app.core.config import TierLimits, get_settings
 from app.core.errors import AppError
 from app.core.filetypes import MIME_TYPES, detect_type
 from app.models.documents import Document
-from app.repositories.documents import count_documents, insert_document
+from app.repositories.documents import (
+    count_documents,
+    get_document,
+    insert_document,
+    list_documents,
+    requeue_for_owner,
+)
 from app.services.owners import CurrentOwner, lock_write_owner
-from app.services.rate_limit import rate_limited, url_fetches
+from app.services.rate_limit import document_retries, rate_limited, url_fetches
 from app.services.url_fetch import fetch_url
 
 
@@ -70,7 +76,7 @@ async def create_document(
     the object.
     """
     id = uuid4()
-    key = f"documents/{id}"
+    key = storage.document_key(id)
     await storage.put_object(key, data, mime)
     try:
         owner = await get_owner()
@@ -84,6 +90,42 @@ async def create_document(
             await storage.delete_object(key)
         raise
     return doc
+
+
+async def list_owner_documents(db: AsyncSession, owner: CurrentOwner | None) -> Sequence[Document]:
+    """The owner's documents, newest first; none without an owner."""
+    return [] if owner is None else await list_documents(db, owner.owner_id)
+
+
+async def get_owner_document(db: AsyncSession, owner: CurrentOwner | None, id: UUID) -> Document:
+    """The owner's document; 404 when it is unknown, another owner's, or there is no owner."""
+    doc = None if owner is None else await get_document(db, owner.owner_id, id)
+    if doc is None:
+        raise _not_found()
+    return doc
+
+
+async def retry_document(db: AsyncSession, owner: CurrentOwner | None, id: UUID) -> Document:
+    """Queue a failed or ready document again and commit (ADR 0002).
+
+    Every attempt counts against DOCUMENT_RETRY_PER_HOUR for the owner. 409 when the
+    document is pending or processing.
+    """
+    if owner is None:
+        raise _not_found()
+    retry_after = document_retries.hit(str(owner.owner_id), get_settings().document_retry_per_hour)
+    if retry_after is not None:
+        raise rate_limited(retry_after)
+    doc = await requeue_for_owner(db, owner.owner_id, id)
+    if doc is None:
+        await get_owner_document(db, owner, id)
+        raise AppError(409, "document_busy", "The document is already queued or processing")
+    await db.commit()
+    return doc
+
+
+def _not_found() -> AppError:
+    return AppError(404, "not_found", "Document not found")
 
 
 async def _ensure_below_cap(db: AsyncSession, owner_id: UUID, max_docs: int) -> None:

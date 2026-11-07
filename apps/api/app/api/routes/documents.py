@@ -1,4 +1,5 @@
 from pathlib import PurePosixPath
+from uuid import UUID
 
 from fastapi import APIRouter, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -14,6 +15,22 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 # Allowance for multipart boundaries and part headers on top of the file size limit.
 _MULTIPART_OVERHEAD = 16 * 1024
+
+
+@router.get("")
+async def list_documents(db: DbSession, owner: ReadOwner) -> list[DocumentOut]:
+    docs = await documents.list_owner_documents(db, owner)
+    return [DocumentOut.model_validate(doc) for doc in docs]
+
+
+@router.get("/{id}")
+async def get_document(id: UUID, db: DbSession, owner: ReadOwner) -> DocumentOut:
+    return DocumentOut.model_validate(await documents.get_owner_document(db, owner, id))
+
+
+@router.post("/{id}/retry", status_code=202)
+async def retry_document(id: UUID, db: DbSession, owner: ReadOwner) -> DocumentOut:
+    return DocumentOut.model_validate(await documents.retry_document(db, owner, id))
 
 
 # No File/Form parameter: FastAPI would read and spool the whole body before the cap check.
