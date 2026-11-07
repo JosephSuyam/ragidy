@@ -1,4 +1,5 @@
 import asyncio
+import io
 import os
 import uuid
 from collections.abc import Iterator
@@ -7,6 +8,7 @@ from contextlib import suppress
 import boto3
 import pytest
 from botocore.exceptions import ClientError
+from botocore.response import StreamingBody
 from botocore.stub import Stubber
 
 from app.core import storage
@@ -58,6 +60,23 @@ def test_put_raises_other_errors_without_creating_a_bucket(stub: Stubber) -> Non
 def test_delete_object(stub: Stubber) -> None:
     stub.add_response("delete_object", {}, {"Bucket": "ragidy", "Key": "documents/1"})
     asyncio.run(storage.delete_object("documents/1"))
+
+
+def test_get_object_returns_body_and_content_type(stub: Stubber) -> None:
+    body = StreamingBody(io.BytesIO(b"hello"), 5)
+    stub.add_response(
+        "get_object",
+        {"Body": body, "ContentType": "text/plain"},
+        {"Bucket": "ragidy", "Key": "documents/1"},
+    )
+
+    assert asyncio.run(storage.get_object("documents/1")) == (b"hello", "text/plain")
+
+
+def test_get_object_raises_for_a_missing_key(stub: Stubber) -> None:
+    stub.add_client_error("get_object", "NoSuchKey", http_status_code=404)
+    with pytest.raises(ClientError, match="NoSuchKey"):
+        asyncio.run(storage.get_object("documents/1"))
 
 
 @pytest.fixture(scope="session")

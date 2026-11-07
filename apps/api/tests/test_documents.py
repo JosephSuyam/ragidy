@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any
 
 import httpx
 import pytest
@@ -306,3 +307,155 @@ def test_upload_without_file_field_422(
         ]
     }
     assert_nothing_written(response, db_engine, fake_storage)
+
+
+def set_status(db_engine: Engine, id: str, status: str, created_ago: int = 0) -> None:
+    sql = (
+        "UPDATE documents SET status = :status, attempts = 3, error = 'boom', "
+        "created_at = now() - make_interval(secs => :ago) WHERE id = :id"
+    )
+    with db_engine.begin() as conn:
+        conn.execute(text(sql), {"status": status, "ago": created_ago, "id": id})
+
+
+def document_state(db_engine: Engine, id: str) -> tuple[Any, ...]:
+    sql = "SELECT status, attempts, error FROM documents WHERE id = :id"
+    with db_engine.connect() as conn:
+        return tuple(conn.execute(text(sql), {"id": id}).one())
+
+
+def new_guest_document(client: TestClient, status: str = "pending") -> tuple[str, str]:
+    """Upload as a fresh guest; return the document id and the guest cookie."""
+    client.cookies.clear()
+    response = upload(client, b"hello")
+    assert response.status_code == 202, response.text
+    return response.json()["id"], client.cookies[GUEST_COOKIE]
+
+
+def as_guest(client: TestClient, token: str) -> None:
+    client.cookies.clear()
+    client.cookies.set(GUEST_COOKIE, token)
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_list_documents_is_the_owners_newest_first(client: TestClient, db_engine: Engine) -> None:
+    theirs, _ = new_guest_document(client)
+    old, _ = new_guest_document(client)
+    set_status(db_engine, old, "ready", created_ago=60)
+    new = upload(client, b"second").json()["id"]
+
+    response = client.get("/documents")
+
+    assert response.status_code == 200, response.text
+    assert [d["id"] for d in response.json()] == [new, old]
+    assert theirs not in {d["id"] for d in response.json()}
+
+
+def test_reads_without_a_cookie_find_nothing_and_create_no_guest(
+    client: TestClient, db_engine: Engine
+) -> None:
+    listed = client.get("/documents")
+    missing = client.get(f"/documents/{uuid.uuid4()}")
+
+    assert (listed.status_code, listed.json()) == (200, [])
+    assert missing.status_code == 404, missing.text
+    for response in (listed, missing):
+        assert "set-cookie" not in response.headers
+    assert (count(db_engine, "owners"), count(db_engine, "guests")) == (0, 0)
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_get_document_is_owner_scoped(client: TestClient) -> None:
+    theirs, _ = new_guest_document(client)
+    mine, token = new_guest_document(client)
+    as_guest(client, token)
+
+    found = client.get(f"/documents/{mine}")
+    assert found.status_code == 200, found.text
+    assert {k: found.json()[k] for k in ("id", "status")} == {"id": mine, "status": "pending"}
+    for id in (theirs, uuid.uuid4()):
+        response = client.get(f"/documents/{id}")
+        assert response.status_code == 404, response.text
+        assert response.json() == {"code": "not_found", "detail": "Document not found"}
+
+
+@pytest.mark.parametrize("status", ["failed", "ready"])
+@pytest.mark.usefixtures("fake_storage")
+def test_retry_requeues_a_finished_document(
+    client: TestClient, db_engine: Engine, status: str
+) -> None:
+    id, _ = new_guest_document(client)
+    set_status(db_engine, id, status)
+
+    response = client.post(f"/documents/{id}/retry")
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert (body["id"], body["status"], body["attempts"], body["error"]) == (id, "pending", 0, None)
+    assert document_state(db_engine, id) == ("pending", 0, None)
+
+
+@pytest.mark.parametrize("status", ["pending", "processing"])
+@pytest.mark.usefixtures("fake_storage")
+def test_retry_of_an_active_document_409(
+    client: TestClient, db_engine: Engine, status: str
+) -> None:
+    id, _ = new_guest_document(client)
+    set_status(db_engine, id, status)
+
+    response = client.post(f"/documents/{id}/retry")
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "document_busy"
+    assert document_state(db_engine, id) == (status, 3, "boom")
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_retry_of_another_owners_or_without_a_cookie_404(
+    client: TestClient, db_engine: Engine
+) -> None:
+    theirs, _ = new_guest_document(client)
+    set_status(db_engine, theirs, "failed")
+    _, token = new_guest_document(client)
+    as_guest(client, token)
+    guests = count(db_engine, "guests")
+
+    foreign = client.post(f"/documents/{theirs}/retry")
+    client.cookies.clear()
+    anonymous = client.post(f"/documents/{theirs}/retry")
+
+    for response in (foreign, anonymous):
+        assert response.status_code == 404, response.text
+        assert response.json()["code"] == "not_found"
+    assert "set-cookie" not in anonymous.headers
+    assert count(db_engine, "guests") == guests
+    assert document_state(db_engine, theirs) == ("failed", 3, "boom")
+
+
+def test_retry_rate_limit_counts_every_attempt(
+    db_override: GetDb, db_engine: Engine, fake_storage: Objects, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DOCUMENT_RETRY_PER_HOUR", "2")
+    with app_client(db_override) as client:
+        id, _ = new_guest_document(client)
+        set_status(db_engine, id, "failed")
+        # The second attempt is refused as busy, yet still counts.
+        statuses = [client.post(f"/documents/{id}/retry").status_code for _ in range(2)]
+        limited = client.post(f"/documents/{id}/retry")
+
+    assert statuses == [202, 409]
+    assert limited.status_code == 429, limited.text
+    assert limited.json()["code"] == "rate_limited"
+    assert 0 < int(limited.headers["retry-after"]) <= 3600
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_retry_from_another_origin_403(client: TestClient, db_engine: Engine) -> None:
+    id, _ = new_guest_document(client)
+    set_status(db_engine, id, "failed")
+
+    response = client.post(f"/documents/{id}/retry", headers={"Origin": "https://evil.example"})
+
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "origin_mismatch"
+    assert document_state(db_engine, id) == ("failed", 3, "boom")

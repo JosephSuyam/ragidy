@@ -3,13 +3,14 @@ import gzip
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from contextlib import contextmanager
 from http.cookies import Morsel, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
@@ -17,19 +18,26 @@ from alembic.config import Config
 from fastapi import APIRouter, Request
 from fastapi.testclient import TestClient
 from httpx import Response
+from llama_index.core import MockEmbedding
 from sqlalchemy import Connection, Engine, create_engine, inspect, make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from alembic import command
 from app.api.deps import DbSession, WriteOwner, client_ip_key
-from app.core import storage
+from app.core import providers, storage
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.errors import AppError
 from app.services import url_fetch
 from app.services.owners import lock_write_owner
-from app.services.rate_limit import auth_requests, guest_creations, login_failures, url_fetches
+from app.services.rate_limit import (
+    auth_requests,
+    document_retries,
+    guest_creations,
+    login_failures,
+    url_fetches,
+)
 
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 ORIGIN = "http://localhost:5173"  # Settings.public_base_url default
@@ -148,6 +156,7 @@ def _reset_app_state() -> None:
     auth_requests.clear()
     login_failures.cache_clear()
     url_fetches.clear()
+    document_retries.clear()
     storage._client.cache_clear()
 
 
@@ -165,9 +174,26 @@ def fake_storage(monkeypatch: pytest.MonkeyPatch) -> Objects:
     async def delete_object(key: str) -> None:
         objects.pop(key, None)
 
+    async def get_object(key: str) -> tuple[bytes, str]:
+        return objects[key]
+
     monkeypatch.setattr(storage, "put_object", put_object)
     monkeypatch.setattr(storage, "delete_object", delete_object)
+    monkeypatch.setattr(storage, "get_object", get_object)
     return objects
+
+
+@pytest.fixture
+def mock_embeddings(app_env: None, monkeypatch: pytest.MonkeyPatch) -> list[MockEmbedding]:
+    """Mock embeddings at the provider factory; returns the models it handed out."""
+    handed_out: list[MockEmbedding] = []
+
+    def get_embed_model(settings: Settings) -> MockEmbedding:
+        handed_out.append(MockEmbedding(embed_dim=8))
+        return handed_out[-1]
+
+    monkeypatch.setattr(providers, "get_embed_model", get_embed_model)
+    return handed_out
 
 
 NOTES_MD = b"# Notes\n"
@@ -356,18 +382,23 @@ def db_engine(db_url: str) -> Iterator[Engine]:
 
 
 @pytest.fixture
-def db_override(
-    db_url: str, db_engine: Engine, app_env: None
-) -> Callable[[], AsyncIterator[AsyncSession]]:
-    """A `get_db` override on the emptied test database, for tests that need several clients."""
+def db_sessions(db_url: str, db_engine: Engine) -> async_sessionmaker[AsyncSession]:
+    """Async sessions on the emptied test database; NullPool, so any event loop can use them."""
     with db_engine.begin() as conn:
         conn.execute(text("TRUNCATE owners CASCADE"))
-    sessions = async_sessionmaker(
+    return async_sessionmaker(
         create_async_engine(db_url, poolclass=NullPool), expire_on_commit=False
     )
 
+
+@pytest.fixture
+def db_override(
+    db_sessions: async_sessionmaker[AsyncSession], app_env: None
+) -> Callable[[], AsyncIterator[AsyncSession]]:
+    """A `get_db` override on the emptied test database, for tests that need several clients."""
+
     async def test_db() -> AsyncIterator[AsyncSession]:
-        async with sessions() as session:
+        async with db_sessions() as session:
             yield session
 
     return test_db
@@ -377,3 +408,80 @@ def db_override(
 def client(db_override: Callable[[], AsyncIterator[AsyncSession]]) -> Iterator[TestClient]:
     with app_client(db_override) as test_client:
         yield test_client
+
+
+Sessions = async_sessionmaker[AsyncSession]
+
+
+def run[T](coro: Coroutine[Any, Any, T]) -> T:
+    return asyncio.run(coro, loop_factory=asyncio.SelectorEventLoop)
+
+
+def in_session[T](sessions: Sessions, call: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """`call` in one committed session."""
+
+    async def go() -> T:
+        async with sessions() as db:
+            result = await call(db)
+            await db.commit()
+            return result
+
+    return run(go())
+
+
+def add_owner(db_engine: Engine) -> UUID:
+    with db_engine.begin() as conn:
+        return conn.execute(
+            text("INSERT INTO owners (kind) VALUES ('guest') RETURNING id")
+        ).scalar_one()
+
+
+def add_document(
+    db_engine: Engine,
+    owner_id: UUID,
+    status: str = "pending",
+    *,
+    attempts: int = 0,
+    error: str | None = None,
+    due_in: float = -1,
+    created_ago: float = 0,
+    source: str = "s",
+) -> UUID:
+    """A document whose run_after is `due_in` seconds from now (negative means due)."""
+    if status == "failed" and error is None:
+        error = "boom"
+    sql = (
+        "INSERT INTO documents (owner_id, source, embed_model, status, attempts, error, "
+        "run_after, created_at) VALUES (:owner_id, :source, 'old-model', :status, :attempts, "
+        ":error, now() + make_interval(secs => :due_in), "
+        "now() - make_interval(secs => :created_ago)) RETURNING id"
+    )
+    params = {
+        "owner_id": owner_id,
+        "source": source,
+        "status": status,
+        "attempts": attempts,
+        "error": error,
+        "due_in": due_in,
+        "created_ago": created_ago,
+    }
+    with db_engine.begin() as conn:
+        return conn.execute(text(sql), params).scalar_one()
+
+
+def row(db_engine: Engine, id: UUID) -> Any:
+    sql = (
+        "SELECT status, attempts, error, embed_model, run_after, run_after - now() AS due_in "
+        "FROM documents WHERE id = :id"
+    )
+    with db_engine.connect() as conn:
+        return conn.execute(text(sql), {"id": id}).one()
+
+
+def stored_chunks(db_engine: Engine, document_id: UUID) -> list[tuple[Any, ...]]:
+    sql = (
+        "SELECT position, text, metadata, embedding::text FROM chunks "
+        "WHERE document_id = :id ORDER BY position"
+    )
+    with db_engine.connect() as conn:
+        return [tuple(r) for r in conn.execute(text(sql), {"id": document_id})]
