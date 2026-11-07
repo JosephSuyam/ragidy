@@ -9,6 +9,9 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - Set LlamaIndex `OpenAIEmbedding(max_retries=1)` for at most 2 requests, never assume one retry layer, because it applies `max_retries` twice (OpenAI client retry plus its own tenacity wrapper). (api, 2026-11-05)
 - Never log, `repr` or serialize (`to_dict`, `to_json`) a LlamaIndex `OpenAIEmbedding`, because it stores `api_key` as a plain str, not `SecretStr`. (api, 2026-11-05)
 - Hash or verify passwords (argon2) before the request's first DB query, or commit the read transaction first, because the pooled connection otherwise idles in a transaction during the hash and about 15 concurrent logins exhaust the pool. (api, 2026-11-06)
+- Reject a DOCX DOCTYPE only after requiring strict UTF-8 with no NUL bytes, because expat auto-detects UTF-16 even with `XMLParser(encoding="utf-8")`, so a UTF-16 `<!DOCTYPE` slips past a byte check and its entities expand. (api, 2026-11-08)
+- Strip `\x00` from parsed text before storing it, because pypdf `extract_text()` emits NUL for some fonts and Postgres `text` rejects it after the embeddings were already paid. (api, 2026-11-08)
+- Set `num_workers` on LlamaIndex embed models, because without it `aget_text_embedding_batch` sends every batch at once with `asyncio.gather` (about 25 OpenAI or 250 Ollama parallel requests for a 5 MB file). (api, 2026-11-08)
 
 ## Web
 - In Vite `server.proxy`, scrub `req.url` in an `error` listener added in `configure`, because `configure` runs before Vite attaches its own error logger, which prints `req.url` with the query (OAuth codes). (web, 2026-11-06)
@@ -32,3 +35,4 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - PRs trigger no CI; after each merge, watch the Pipeline run (`gh run list --workflow pipeline.yml --branch <branch>`), because a merged PR is not proof the branch is green. (workflow, 2026-11-04)
 - In nginx, `proxy_pass` to a Docker service through `resolver 127.0.0.11` and a variable (`set $api http://api:8000`), never a literal host, because nginx resolves literal upstreams at startup and fails `nginx -t` (`host not found in upstream "api"`) when the service is not up. (infra, 2026-11-06)
 - On nginx routes whose query holds a secret (the OAuth callback), turn off both `access_log` and `error_log`, because nginx error lines of every level quote the full request line, query included. (infra, 2026-11-06)
+- Tell parallel agents to prefix their scratchpad files, because agents share the session scratchpad and one agent's `smoke.py` overwrote another's. (workflow, 2026-11-08)

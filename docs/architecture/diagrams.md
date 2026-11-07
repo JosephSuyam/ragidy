@@ -33,7 +33,7 @@ flowchart TD
     workers["Workers (app/workers)"]
   end
   subgraph RAG["RAG Layer: LlamaIndex (app/rag)"]
-    ingestion["Ingestion (app/rag/ingestion)<br/>Parsers (app/rag/parsers)<br/>Chunking (app/rag/chunking)<br/>Embeddings (app/rag/embeddings)<br/>Indexing (app/rag/indexing)"]
+    ingestion["Ingestion, embedding (app/rag/ingestion)<br/>Parsers (app/rag/parsers)<br/>Chunking (app/rag/chunking)"]
     retrieval["Retrieval (app/rag/retrieval)<br/>Reranking (app/rag/reranking)"]
   end
   subgraph AGENTS["Agent Layer: LangChain / LangGraph (app/agents)"]
@@ -84,12 +84,12 @@ sequenceDiagram
     R-->>UI: document id, status pending
     W->>DB: claim pending row, SKIP LOCKED, status processing (app/repositories)
     W->>OS: read raw file at documents/<id> (app/core)
-    W->>RAG: Load (app/rag/ingestion), Parse (app/rag/parsers),<br/>Chunk (app/rag/chunking), Embed (app/rag/embeddings),<br/>Index (app/rag/indexing)
-    RAG->>DB: PGVectorStore writes vectors (app/rag/indexing)
+    W->>RAG: Parse (app/rag/parsers), Chunk (app/rag/chunking),<br/>Embed (app/rag/ingestion)
+    RAG-->>W: EmbeddedChunk list (text, embedding, metadata)
     alt success
-      W->>DB: status ready (app/repositories)
+      W->>DB: replace the document's chunks (app/repositories/vector),<br/>status ready, embed_model used (app/repositories)
     else error
-      Note over W: 3 attempts in total, with backoff
+      Note over W: 3 attempts in total, with backoff;<br/>an IngestionError (unusable input) fails at once
       W->>DB: status pending with backoff while attempts are under 3, else failed, store error (app/repositories)
     end
     Note over UI: shows the status and offers a retry
@@ -125,6 +125,7 @@ erDiagram
   owners ||--o{ documents : "owns (RESTRICT)"
   owners ||--o{ chats : "owns (RESTRICT)"
   chats ||--o{ messages : "has (CASCADE)"
+  documents ||--o{ chunks : "has (CASCADE)"
   owners {
     id uuid PK
     kind text "user or guest"
@@ -170,6 +171,14 @@ erDiagram
     run_after timestamptz "default now"
     created_at timestamptz
   }
+  chunks {
+    id uuid PK
+    document_id uuid FK "unique with position"
+    position int
+    text text
+    metadata jsonb "default empty object"
+    embedding vector "no dimension"
+  }
   chats {
     id uuid PK "LangGraph thread id"
     owner_id uuid FK
@@ -190,6 +199,7 @@ erDiagram
 - The partial index `ix_documents_pending_run_after` (on `run_after`, `WHERE status = 'pending'`) serves the worker's job-queue claim ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)). `chats` and `messages` have `(owner_id, created_at)` and `(chat_id, created_at)` indexes for listing.
 - `RESTRICT` on `documents` and `chats` blocks deleting an owner that still owns either, so a cascade never drops rows whose vectors, objects or checkpoints still exist. The guest purge deletes those first, then the rows, then the owner ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)).
 - The object key is not a column: it is `documents/<id>`, derived from the document's `id`.
-- The LlamaIndex vector table and the LangGraph checkpoint tables live in the same database, but outside Alembic and this diagram.
+- `chunks.embedding` has no dimension, so changing `EMBED_MODEL` needs no migration; retrieval filters on `documents.embed_model`. There is no HNSW index for the MVP ([ADR 0006](../decisions/0006-vector-store.md)).
+- The LangGraph checkpoint tables live in the same database, but outside Alembic and this diagram.
 
 [Runtime self-healing rules](overview.md#runtime-self-healing-rules)
