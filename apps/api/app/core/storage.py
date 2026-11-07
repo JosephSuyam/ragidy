@@ -2,6 +2,7 @@ import asyncio
 from contextlib import suppress
 from functools import lru_cache
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import boto3
 from botocore.config import Config
@@ -22,6 +23,11 @@ _CONFIG = Config(
     connect_timeout=10,
     read_timeout=60,
 )
+
+
+def document_key(id: UUID) -> str:
+    """The object key of a document's raw file (ADR 0002)."""
+    return f"documents/{id}"
 
 
 @lru_cache
@@ -57,3 +63,14 @@ async def put_object(key: str, data: bytes, content_type: str) -> None:
 
 async def delete_object(key: str) -> None:
     await asyncio.to_thread(_client().delete_object, Bucket=get_settings().s3_bucket, Key=key)
+
+
+def _get(key: str) -> tuple[bytes, str]:
+    obj = _client().get_object(Bucket=get_settings().s3_bucket, Key=key)
+    with obj["Body"] as body:
+        return body.read(), obj["ContentType"]
+
+
+async def get_object(key: str) -> tuple[bytes, str]:
+    """The object's bytes and its stored Content-Type."""
+    return await asyncio.to_thread(_get, key)
