@@ -74,6 +74,30 @@ def test_upload_stores_object_then_pending_row_for_new_guest(
     assert client.get("/me").json()["document_count"] == 1
 
 
+def test_upload_filename_nul_is_stripped(
+    client: TestClient, db_engine: Engine, fake_storage: Objects
+) -> None:
+    boundary = "ragidy-test-boundary"
+    head = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="a\x00.txt"\r\n'
+        "Content-Type: text/plain\r\n\r\n"
+    ).encode()
+    body = head + b"plain words" + f"\r\n--{boundary}--\r\n".encode()
+    assert b"\x00" in body, "httpx files= would send %00 instead of a raw NUL"
+
+    response = client.post(
+        "/documents",
+        content=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["source"] == "a.txt"
+    with db_engine.connect() as conn:
+        assert conn.execute(text("SELECT source FROM documents")).scalars().all() == ["a.txt"]
+
+
 @pytest.mark.parametrize(
     ("extra", "status"),
     [(0, 202), (1, 413), (64 * 1024, 413)],  # 64 KiB over: rejected by Content-Length alone
@@ -302,11 +326,35 @@ def test_upload_without_file_field_422(
     response = client.post("/documents", files={"other": ("a.txt", b"x", "text/plain")})
     assert response.status_code == 422, response.text
     assert response.json() == {
-        "detail": [
-            {"type": "missing", "loc": ["body", "file"], "msg": "Field required", "input": None}
-        ]
+        "detail": [{"type": "missing", "loc": ["body", "file"], "msg": "Field required"}]
     }
     assert_nothing_written(response, db_engine, fake_storage)
+
+
+def test_add_url_nul_422_never_fetches(
+    db_override: GetDb, db_engine: Engine, fake_storage: Objects, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("URL_FETCH_PER_HOUR", "1")
+    fetched: list[str] = []
+    real_fetch = documents.fetch_url
+
+    async def spy(url: str, max_bytes: int) -> tuple[bytes, str]:
+        fetched.append(url)
+        return await real_fetch(url, max_bytes)
+
+    monkeypatch.setattr(documents, "fetch_url", spy)
+    nul_url = f"https://example.com/{uuid.uuid4().hex}\x00"
+    with app_client(db_override) as client:
+        nul_responses = [add_url(client, nul_url), add_url(client, nul_url)]
+        # The limit of 1 is still free: only a 422 that skipped the limit leaves it open.
+        blocked = add_url(client, "file:///etc/passwd")
+
+    assert [r.status_code for r in nul_responses] == [422, 422]
+    assert all("set-cookie" not in r.headers for r in nul_responses)
+    assert (blocked.status_code, blocked.json()["code"]) == (422, "url_blocked")
+    assert fetched == ["file:///etc/passwd"]
+    assert fake_storage == {}
+    assert count(db_engine, "documents") == 0
 
 
 def set_status(db_engine: Engine, id: str, status: str, created_ago: int = 0) -> None:

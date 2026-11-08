@@ -41,7 +41,7 @@ async def upload_document(
     limits, max_bytes = documents.upload_limits(owner)
     await documents.check_cap(db, owner, limits.max_docs)
     data, filename = await _read_upload(request, max_bytes)
-    source = PurePosixPath(filename.replace("\\", "/")).name or "upload"
+    source = PurePosixPath(filename.replace("\\", "/").replace("\x00", "")).name or "upload"
     mime = documents.content_type(data, source, limits)
     doc = await documents.create_document(
         db, data, mime, source, limits.max_docs, lambda: write_owner(request, response, db, owner)
