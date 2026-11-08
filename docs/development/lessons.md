@@ -17,6 +17,8 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 
 ## Web
 - In Vite `server.proxy`, scrub `req.url` in an `error` listener added in `configure`, because `configure` runs before Vite attaches its own error logger, which prints `req.url` with the query (OAuth codes). (web, 2026-11-06)
+- In a Web loader used by an effect, write a promise `.then(onOk, onErr)` chain shared by the effect and its callers, never an async function that sets state synchronously in `try/catch`, because oxlint `react/set-state-in-effect` (with `--deny-warnings`) fails the gate; do not disable the rule or duplicate the fetch. (web, 2026-11-08)
+- Update session state without remounting the app (`sessionVersion`) when the first-write gate refetches `/me` after the first guest write, because a remount unmounts the view mid-flow and aborts its next request (a chat's SSE stream right after `POST /chats`). (web, 2026-11-08)
 
 ## Tests
 - Test S3 endpoints with boto3, never `curl --aws-sigv4` from curl older than 7.86, because old curl omits `x-amz-content-sha256`, so valid credentials get `SignatureDoesNotMatch`. (tests, 2026-11-04)
@@ -39,4 +41,5 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - PRs trigger no CI; after each merge, watch the Pipeline run (`gh run list --workflow pipeline.yml --branch <branch>`), because a merged PR is not proof the branch is green. (workflow, 2026-11-04)
 - In nginx, `proxy_pass` to a Docker service through `resolver 127.0.0.11` and a variable (`set $api http://api:8000`), never a literal host, because nginx resolves literal upstreams at startup and fails `nginx -t` (`host not found in upstream "api"`) when the service is not up. (infra, 2026-11-06)
 - On nginx routes whose query holds a secret (the OAuth callback), turn off both `access_log` and `error_log`, because nginx error lines of every level quote the full request line, query included. (infra, 2026-11-06)
+- Never make a tool that imports the `typescript` JS API (`openapi-typescript`, peer `typescript ^5.x`) a devDependency of `apps/web`, because TypeScript 7 (the Go port) ships no JS compiler API (`lib/` holds only `tsc.js`); use a nested package with its own pinned `typescript@5` and lockfile (`packages/shared-types`). (tooling, 2026-11-08)
 - Tell parallel agents to prefix their scratchpad files, because agents share the session scratchpad and one agent's `smoke.py` overwrote another's. (workflow, 2026-11-08)

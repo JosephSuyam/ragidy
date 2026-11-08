@@ -14,7 +14,7 @@ Build order for the MVP in `docs/architecture/requirements.md` (R1-R14). Status 
 10. Retrieval and generation (corrective RAG); test RAG on its own: done (PR #19, ADR 0007: `answer_question` service, owner-scoped pgvector search, LangGraph corrective loop; no endpoint yet, R12 ACs close in step 11)
 11. LangGraph chat: SSE answers with citations, history, per-hour limit (R12-R13): done (PR #20, ADR 0008: `POST /chats`, `GET /chats`, `GET /chats/{id}/messages`, `POST /chats/{id}/messages` SSE; history is `messages` rows, no checkpointer; R12-R13 ACs, R1 AC1-2)
 12. Deletion and guest purge (R10, R14): done (PR #23, ADR 0009: `DELETE /documents/{id}`, `DELETE /chats/{id}`, the worker purges expired guests and sessions every 15 minutes; R10, R14 ACs, R1 AC3, R9 AC4)
-13. React frontend: auth, upload, document status/retry, chat, sources, `packages/shared-types`: next
+13. React frontend: auth, upload, document status/retry, chat, sources, `packages/shared-types`: in progress (13a PR #24: auth shell, shared types (ADR 0010); 13b, 13c: upload, documents, chat)
 14. Testing and deployment: SeaweedFS hardening, e2e, Linux `extra_hosts` for Ollama, promote `develop` → `staging` → `main`
 
 Notes: ChromaDB replaced by pgvector (ADR 0001); LangChain and LangGraph live only in `app/agents` (first code in step 10).

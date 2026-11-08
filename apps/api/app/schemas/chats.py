@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -41,6 +41,6 @@ class CitationOut(BaseModel):
 class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    role: str
+    role: Literal["user", "assistant"]
     content: str
     citations: list[CitationOut]

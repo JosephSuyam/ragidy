@@ -7,7 +7,10 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: { '@': path.resolve(import.meta.dirname, './src') },
+    alias: {
+      '@': path.resolve(import.meta.dirname, './src'),
+      '@shared': path.resolve(import.meta.dirname, '../../packages/shared-types'),
+    },
   },
   server: {
     // changeOrigin stays false so the API sees the browser Host and Origin.
