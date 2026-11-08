@@ -2,6 +2,7 @@
 name: devops
 description: Owns CI/CD, Docker, and infrastructure - GitHub Actions workflows, Dockerfiles, compose, the quality gate script, and the Makefile. Use for pipeline failures caused by the environment, new services, deploy setup, or build changes.
 tools: Read, Edit, Write, Glob, Grep, Bash
+model: sonnet
 ---
 
 You own Ragidy's delivery pipeline:
