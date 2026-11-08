@@ -23,8 +23,8 @@ All cookies (`ragidy_session`, `ragidy_guest` and `ragidy_oauth`) are `HttpOnly;
 ## Feature requirements
 
 ### R1 Guest session
-- [ ] Given no cookie, when a client makes its first write (upload, URL, new chat), then the server creates a guest, sets `ragidy_guest` with `Max-Age` of `GUEST_TTL_DAYS` days, and the write belongs to that guest.
-- [ ] Given no cookie, when a client lists documents or chats, then it gets `200` with an empty list and no guest row is created.
+- [x] Given no cookie, when a client makes its first write (upload, URL, new chat), then the server creates a guest, sets `ragidy_guest` with `Max-Age` of `GUEST_TTL_DAYS` days, and the write belongs to that guest.
+- [x] Given no cookie, when a client lists documents or chats, then it gets `200` with an empty list and no guest row is created.
 - [ ] Given guests A and B, when B reads, retries or deletes A's document or chat by id, then the response is `404`.
 - [x] No table contains the raw cookie value; `guests` holds only its hash.
 - [x] An unknown or expired guest cookie is treated as no cookie.
@@ -67,7 +67,7 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [ ] Moved documents keep their id, status, object and vectors; moved chats keep their full history; a `pending` document still reaches `ready`.
 - [ ] Migration ignores `MAX_DOCS_USER`. A user over the cap keeps every document, and further uploads return `409 document_limit_reached` until they delete enough.
 - [x] If the guest's `owners` row is already gone at `FOR UPDATE` (the purge won the race), there is nothing to migrate and the login succeeds. Only a failure while moving existing rows fails the login, and then nothing moves.
-- [ ] An upload, URL, chat-creation or message request that reaches its insert after the guest's `owners` row was deleted by the migration returns `401 session_expired` and leaves no row or object (R9, R12).
+- [x] An upload, URL, chat-creation or message request that reaches its insert after the guest's `owners` row was deleted by the migration returns `401 session_expired` and leaves no row or object (R9, R12).
 
 ### R7 Upload size and types per tier
 - [x] A file larger than `UPLOAD_MAX_MB_<tier> × 1024 × 1024` bytes returns `413 too_large` and writes no object and no row. The server reads the request body only up to the limit plus a 16 KiB multipart allowance and returns `413` as soon as the body passes it, or before reading when `Content-Length` is over it. A file of exactly the limit is accepted.
@@ -102,7 +102,7 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 ### R10 Guest expiry
 - [ ] A guest's `expires_at` is its creation time plus `GUEST_TTL_DAYS`. Activity does not extend it. A changed `GUEST_TTL_DAYS` applies to new guests only.
 - [ ] After `expires_at`, the cookie no longer resolves, so the data is hidden before the purge runs.
-- [ ] The worker purges expired guests at least once an hour. Each guest's purge starts with `SELECT ... FOR UPDATE` on its `owners` row and re-checks `expires_at` under that lock, so it never deletes data that just moved (R6). An upload, URL, chat-creation or message request that reaches its insert after the purge deleted the owner row returns `401 session_expired` (R9, R12). After a purge, no document row, object, vector, chat row or checkpoint of that guest remains.
+- [ ] The worker purges expired guests at least once an hour. Each guest's purge starts with `SELECT ... FOR UPDATE` on its `owners` row and re-checks `expires_at` under that lock, so it never deletes data that just moved (R6). An upload, URL, chat-creation or message request that reaches its insert after the purge deleted the owner row returns `401 session_expired` (R9, R12). After a purge, no document row, object, vector, chat or message row of that guest remains.
 - [ ] The same purge deletes expired sessions.
 
 ### R11 Ingestion status and retry
@@ -112,24 +112,24 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [ ] The UI shows each document's status and a retry action on `failed`.
 
 ### R12 Chat with citations
-- [ ] `POST /chats` inserts the chat in one transaction after `SELECT ... FOR UPDATE` on the owner's `owners` row, like the R9 insert. If the row is gone (the guest was purged or migrated mid-request), it returns `401 session_expired` and creates no chat. Rule: every write that depends on a guest-owned row (document, URL, chat or message insert) takes this owner-row lock first, and returns `401 session_expired` when the owner row or the row it depends on is gone.
-- [ ] `POST /chats/{id}/messages` streams the answer as server-sent events: `token` events, then one `citations` event, then `done`.
-- [ ] `POST /chats/{id}/messages` takes `SELECT ... FOR UPDATE` on the chat owner's `owners` row before it inserts the user message, and before the stream opens. If the owner row or the chat is gone (a purge or migration ran mid-request), it returns `401 session_expired` and creates no message.
-- [ ] The assistant message is inserted after the SSE stream ends, when the response is already `200`. After a migration it succeeds, because the chat id does not change and the chat is now under the user's owner. If a purge deleted the chat meanwhile, the insert finds the chat gone, is dropped and logged at info level, and no error reaches the client, because the stream already finished.
-- [ ] Retrieval searches all of the owner's `ready` documents, and only those. Each citation has `document_id`, `source`, `page` (or null) and `snippet`, and every cited document belongs to the owner.
-- [ ] With no ready documents, or no relevant chunk after 2 rewrites, the answer says it was not found in the document and cites nothing.
-- [ ] Another owner's chat id returns `404`.
-- [ ] An owner may send `CHAT_MESSAGES_PER_HOUR_<tier>` messages an hour. Over that, `POST /chats/{id}/messages` returns `429 rate_limited` with `Retry-After` before any LLM call.
+- [x] `POST /chats` inserts the chat in one transaction after `SELECT ... FOR UPDATE` on the owner's `owners` row, like the R9 insert. If the row is gone (the guest was purged or migrated mid-request), it returns `401 session_expired` and creates no chat. Rule: every write that depends on a guest-owned row (document, URL, chat or message insert) takes this owner-row lock first, and returns `401 session_expired` when the owner row or the row it depends on is gone.
+- [x] `POST /chats/{id}/messages` streams the answer as server-sent events: `token` events, then one `citations` event, then `done`.
+- [x] `POST /chats/{id}/messages` takes `SELECT ... FOR UPDATE` on the chat owner's `owners` row before it inserts the user message, and before the stream opens. If the owner row or the chat is gone (a purge or migration ran mid-request), it returns `401 session_expired` and creates no message.
+- [x] The assistant message is inserted after the last `token` event and before `citations`, when the response is already `200`. After a migration it succeeds, because the chat id does not change and the chat is now under the user's owner. If a purge deleted the chat meanwhile, the insert finds the chat gone, is dropped and logged at info level, and no error reaches the client. A client disconnect, or a provider failure (one `error` event instead of `citations` and `done`), stores no assistant message (ADR 0008).
+- [x] Retrieval searches all of the owner's `ready` documents, and only those. Each citation has `document_id`, `source`, `page` (or null) and `snippet`, and every cited document belongs to the owner.
+- [x] With no ready documents, or no relevant chunk after 2 rewrites, the answer says it was not found in the document and cites nothing.
+- [x] Another owner's chat id returns `404`.
+- [x] An owner may send `CHAT_MESSAGES_PER_HOUR_<tier>` messages an hour. Over that, `POST /chats/{id}/messages` returns `429 rate_limited` with `Retry-After` before any LLM call.
 
 ### R13 History
-- [ ] `GET /chats` lists the owner's chats, newest first.
-- [ ] `GET /chats/{id}/messages` returns the messages in order, with the citations of each assistant message.
-- [ ] History survives an API restart and the guest-to-user migration.
+- [x] `GET /chats` lists the owner's chats, newest first.
+- [x] `GET /chats/{id}/messages` returns the messages in order, with the citations of each assistant message.
+- [x] History survives an API restart and the guest-to-user migration.
 
 ### R14 Deletion
 - [ ] `DELETE /documents/{id}` returns `204` and deletes the row, the object and the vectors. Later answers never cite it.
 - [ ] Deleting a `processing` document returns `409 document_busy`. The delete is one guarded statement, so it cannot race the worker's claim.
-- [ ] `DELETE /chats/{id}` returns `204` and deletes the chat row and its checkpoint thread.
+- [ ] `DELETE /chats/{id}` returns `204` and deletes the chat row and its messages.
 - [ ] Deleting another owner's document or chat returns `404`.
 
 ## API contract
@@ -169,7 +169,7 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 - [ ] Client IP: the socket peer address by default. Forwarded headers count only when the peer is in `TRUSTED_PROXIES`; empty (the default) trusts no proxy. `app/main.py` adds uvicorn's `ProxyHeadersMiddleware` with `trusted_hosts` set to the normalized `TRUSTED_PROXIES` strings (for example `10.0.0.0/8`, `192.168.1.1/32`), because the middleware takes strings (no new dependency). The API runs with `--no-proxy-headers`, because uvicorn's own handling trusts `127.0.0.1` by default, so `TRUSTED_PROXIES` is the only source of trust. A test shows that a spoofed `X-Forwarded-For` from an untrusted peer does not change the key. Behind the web container, set `TRUSTED_PROXIES` to its address, or all clients share one key.
 - [ ] Rate-limit IP key: every per-IP limit (guest creation, auth requests, login failures) keys an IPv4 client by its full address and an IPv6 client by its `/64` prefix, because one IPv6 client controls a whole `/64` and could rotate through it. An IPv4-mapped IPv6 peer (`::ffff:a.b.c.d`) is first unwrapped with `ipaddress.IPv6Address.ipv4_mapped` and keyed by that full IPv4 address. The key function never raises: ASGI allows `scope["client"]` to be `None`, so a missing peer is keyed by one shared key, `"unknown"`, and a peer host that is not a valid IP (Starlette's TestClient sends `"testclient"`) is keyed by its raw host string. The test `test_non_ip_peer_keyed_without_error` shows that both cases return a key and raise no error. The test `test_ipv6_same_64_shares_counter` shows that two requests from different addresses in the same IPv6 `/64` share one counter. The test `test_ipv4_mapped_keyed_as_ipv4` shows that a mapped peer shares a counter with the same IPv4 address, and not with other IPv4 clients.
 - [x] CSRF: cookies are `SameSite=Lax`, and middleware in `app/api/middleware` rejects every POST, PUT, PATCH and DELETE whose `Origin` header is missing or differs from the origin of `PUBLIC_BASE_URL`, with `403 origin_mismatch`. The comparison is an exact string match against the normalized `PUBLIC_BASE_URL` (Configurability).
-- [ ] Owner isolation: every repository function for documents and chats that routes or services call takes `owner_id` and puts it in the `WHERE` clause. The worker queries (claim, startup reset, status updates of status, attempts and error, object-key reads by document id, purge) are the only exemptions, named as such and called only from `app/workers`. Retrieval gets only the owner's document ids as plain data. A two-owner test covers read, retry, delete and chat citations.
+- [ ] Owner isolation: every repository function for documents and chats that routes or services call takes `owner_id` and puts it in the `WHERE` clause. The worker queries (claim, startup reset, status updates of status, attempts and error, object-key reads by document id, purge) are the only exemptions, named as such and called only from `app/workers`. Retrieval search (`app/repositories/vector`) takes `owner_id` and filters on it in the `WHERE` clause too, so `app/rag` and `app/agents` never see owners (ADR 0007). The assistant-message insert is the one request-path exemption: it is keyed by `chat_id` only and guarded by `WHERE EXISTS` on the chat, because a guest-to-user migration may move the chat mid-stream; the owner was checked before the stream opened (ADR 0008). A two-owner test covers read, retry, delete and chat citations.
 - [ ] SSRF: URL fetching follows ADR 0002 and R8 (http(s) only, only public IPs on the connected address and every redirect hop, one deadline, size cap). Proxy env vars are ignored.
   Accepted risk: a failed fetch takes no document slot, so `URL_FETCH_PER_HOUR` is what bounds fetches.
 - [ ] At startup, a provider with a client id but no client secret, any enabled provider with an empty `AUTH_SECRET`, or a set `AUTH_SECRET` shorter than 32 characters fails with an error that names the setting.
@@ -208,15 +208,15 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 The web container's nginx accepts bodies up to `6m` on `/api/documents` only. Raising any `UPLOAD_MAX_MB_*` above 5 needs its `client_max_body_size` raised too, above the largest limit plus 16 KiB.
 
 ### Privacy
-- [ ] A guest's documents, objects, vectors, chats and checkpoints are purged after `GUEST_TTL_DAYS` (R10), and hidden from the moment the guest expires.
-- [ ] Deleting a document or chat removes its object, vectors and checkpoint thread, not only the row (R14).
+- [ ] A guest's documents, objects, vectors, chats and messages are purged after `GUEST_TTL_DAYS` (R10), and hidden from the moment the guest expires.
+- [ ] Deleting a document removes its object and vectors, and deleting a chat removes its messages, not only the row (R14).
 - [x] Logs never contain passwords, tokens, cookie values or OAuth codes.
 
 ## Folder ownership
 - Routes: `app/api/routes`. Origin check: `app/api/middleware`. `ProxyHeadersMiddleware` setup: `app/main.py`. In-memory rate-limit counters: `app/services`.
 - Auth, session, guest and migration logic: `app/services`. Queries: `app/repositories`. Tables: `app/models`.
 - OAuth provider entries, the type-to-MIME map, the S3 client and `Settings`: `app/core`. URL validation and fetch: `app/services`.
-- Guest and session purge: `app/workers`, calling `app/rag/indexing` (vectors), `app/agents/memory` (checkpoints), `app/core` (objects) and `app/repositories` (rows).
+- Guest and session purge: `app/workers`, calling `app/rag/indexing` (vectors), `app/core` (objects) and `app/repositories` (rows).
 - Web sign-in, register and logout: `apps/web/src/features/authentication`.
 - `--no-proxy-headers` on the API run command (devops, build step): `infrastructure/docker` and `Makefile`.
 - `/api` proxy (later step): `apps/web` Vite config in dev, and the web server in `infrastructure/docker` in production (:8080).

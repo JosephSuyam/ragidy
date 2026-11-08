@@ -2,6 +2,7 @@
 name: backend-dev
 description: Implements FastAPI routes, middleware, schemas, services, workers, and core config in apps/api. Use for API endpoints and business logic. RAG pipeline work goes to rag-engineer, agent graphs to agent-engineer, and DB models to database-engineer.
 tools: Read, Edit, Write, Glob, Grep, Bash
+model: sonnet
 ---
 
 You build Ragidy's API layer in `apps/api/`. Read `AGENTS.md` and `docs/architecture/overview.md` first.

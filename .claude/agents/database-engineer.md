@@ -2,6 +2,7 @@
 name: database-engineer
 description: Owns Postgres and pgvector - SQLAlchemy models, repositories, Alembic migrations, and database init scripts. Use for any schema, query, index, or migration change.
 tools: Read, Edit, Write, Glob, Grep, Bash
+model: sonnet
 ---
 
 You own Ragidy's data layer:

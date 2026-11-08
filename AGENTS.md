@@ -7,9 +7,9 @@ Pipeline: **chunk → embed → index → retrieve → generate**.
 
 ## Stack
 - **API:** Python 3.12, FastAPI, uv (`apps/api`)
-- **Data and retrieval:** LlamaIndex (`app/rag`). It ingests, parses, chunks, embeds, indexes, retrieves, and reranks.
+- **Data and retrieval:** LlamaIndex (`app/rag`). It parses, chunks, and embeds documents and queries; vector search is SQL in `app/repositories/vector` (ADR 0006, ADR 0007).
 - **Orchestration:** LangChain + LangGraph (`app/agents`). It handles workflows, conversational memory, tools, and state.
-- **Store:** Postgres + pgvector, for vectors, documents, chat history, LangGraph checkpoints, and the ingestion job queue (the `documents` row is the job, ADR 0002). SeaweedFS (any S3-compatible store in production) holds raw uploads and fetched URL content. Migrations use Alembic.
+- **Store:** Postgres + pgvector, for vectors, documents, chat history (`messages` rows, ADR 0008), and the ingestion job queue (the `documents` row is the job, ADR 0002). SeaweedFS (any S3-compatible store in production) holds raw uploads and fetched URL content. Migrations use Alembic.
 - **LLM and embeddings:** pluggable through env vars (`LLM_PROVIDER`, `LLM_MODEL`, `EMBED_PROVIDER`, `EMBED_MODEL`), resolved only in `app/core/providers.py`.
 - **Web:** React + TypeScript (Vite), Tailwind CSS v4, shadcn/ui, oxlint, Vitest (`apps/web`)
 - **CI/CD:** GitHub Actions, Docker images on GHCR

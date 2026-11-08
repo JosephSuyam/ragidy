@@ -1,6 +1,6 @@
 # Architecture diagrams
 
-Source of truth: [overview.md](overview.md), [ADR 0001](../decisions/0001-stack-and-scope.md), [ADR 0002](../decisions/0002-object-storage-and-job-queue.md) and [ADR 0003](../decisions/0003-guest-and-user-accounts.md). These diagrams only restate them.
+Source of truth: [overview.md](overview.md), [ADR 0001](../decisions/0001-stack-and-scope.md), [ADR 0002](../decisions/0002-object-storage-and-job-queue.md), [ADR 0003](../decisions/0003-guest-and-user-accounts.md) and [ADR 0008](../decisions/0008-chat-streaming-and-history.md). These diagrams only restate them.
 
 ## Containers
 
@@ -8,7 +8,7 @@ Source of truth: [overview.md](overview.md), [ADR 0001](../decisions/0001-stack-
 flowchart LR
   browser["Browser"] --> web["Web: React + Vite (apps/web)"]
   web -->|"proxies /api/*, strips /api"| api["API: FastAPI (apps/api)"]
-  api --> db[("Postgres + pgvector<br/>vectors, documents and job queue, chat history, LangGraph checkpoints,<br/>owners, users, oauth_accounts, sessions, guests")]
+  api --> db[("Postgres + pgvector<br/>vectors, documents and job queue, chat history,<br/>owners, users, oauth_accounts, sessions, guests")]
   browser -->|"sign-in redirect"| oauth["OAuth providers<br/>Google, GitHub"]
   api -->|"OAuth client config (app/core)<br/>code exchange, identity"| oauth
   api -->|"raw file"| objstore[("Object storage: SeaweedFS<br/>raw uploads and fetched URL content")]
@@ -34,7 +34,7 @@ flowchart TD
   end
   subgraph RAG["RAG Layer: LlamaIndex (app/rag)"]
     ingestion["Ingestion, embedding (app/rag/ingestion)<br/>Parsers (app/rag/parsers)<br/>Chunking (app/rag/chunking)"]
-    retrieval["Retrieval (app/rag/retrieval)<br/>Reranking (app/rag/reranking)"]
+    retrieval["Retrieval: query embedding (app/rag/retrieval)<br/>Reranking (app/rag/reranking)"]
   end
   subgraph AGENTS["Agent Layer: LangChain / LangGraph (app/agents)"]
     agentmods["Workflows (app/agents/workflows)<br/>Memory (app/agents/memory)<br/>Tools (app/agents/tools)<br/>State (app/agents/state)"]
@@ -53,10 +53,10 @@ flowchart TD
   SERVICE --> objstore
   RAG --> INFRA
   AGENTS --> INFRA
-  retrieval -.->|"RetrievedChunk (text, score, metadata)"| agentmods
+  repos -.->|"RetrievedChunk (text, score, metadata), through a retrieve callable bound in services"| agentmods
 ```
 
-Arrows connect layers, not modules, and each one means "calls"; every arrow points down, and nothing calls upward. Routes only handle requests: they never run retrieval or touch the vector store, and go through services instead. The dotted edge is the only thing that crosses between rag and agents, and it carries plain data. `app/rag` never touches object storage; workers pass it the bytes and the MIME type as plain data. Workers run as their own process and are never called by routes; the API only inserts a `pending` row.
+Arrows connect layers, not modules, and each one means "calls"; every arrow points down, and nothing calls upward. Routes only handle requests: they never run retrieval or touch the vector store, and go through services instead. Rag and agents never call each other: services embed the query through rag, search through repositories, and pass agents a `retrieve` callable. The dotted edge is the only data that reaches agents from retrieval, and it is plain data ([ADR 0007](../decisions/0007-retrieval-and-corrective-rag.md)). `app/rag` never touches object storage; workers pass it the bytes and the MIME type as plain data. Workers run as their own process and are never called by routes; the API only inserts a `pending` row.
 
 ## Ingestion
 
@@ -102,15 +102,19 @@ Status moves `pending → processing → ready | failed`. Services validate the 
 
 ```mermaid
 flowchart LR
-  q["question"] --> agent["Agent: LangGraph (app/agents/workflows)"]
-  mem[("Memory (app/agents/memory)<br/>Postgres checkpointer, one thread per chat")] -->|"memory"| agent
-  agent --> retrieve["Retrieve: LlamaIndex (app/rag/retrieval, app/rag/reranking)"]
+  q["question"] --> checks["Pre-stream checks: chat lookup, rate limit, owner lock (app/services)"]
+  checks -->|"user message, committed"| hist[("History: messages rows (app/repositories)")]
+  checks --> agent["Agent: LangGraph (app/agents/workflows)"]
+  agent --> retrieve["Retrieve: embed query (app/rag/retrieval)<br/>vector search (app/repositories/vector)"]
   retrieve --> grade{"grade_chunks (app/agents/workflows)"}
+  retrieve -->|"no chunks, or same chunks after a rewrite"| notfound
   grade -->|"relevant"| generate["Generate (app/agents/workflows)"]
-  grade -->|"low relevance"| rewrite["rewrite_query, max 2 (app/agents/workflows)"]
+  grade -->|"no relevant chunk"| rewrite["rewrite_query, max 2 (app/agents/workflows)"]
   rewrite --> retrieve
-  grade -->|"still low after 2 rewrites"| notfound["Answer: not found in the document (app/agents/workflows)"]
-  generate --> out["streamed answer + citations"]
+  grade -->|"none after 2 rewrites"| notfound["Answer: not found in the document (app/agents/workflows)"]
+  generate --> out["Stream answer: token, citations, done (app/services)"]
+  notfound --> out
+  out -->|"assistant message, after the last token"| hist
 ```
 
 ## Database schema
@@ -180,7 +184,7 @@ erDiagram
     embedding vector "no dimension"
   }
   chats {
-    id uuid PK "LangGraph thread id"
+    id uuid PK
     owner_id uuid FK
     title text "nullable"
     created_at timestamptz
@@ -197,9 +201,8 @@ erDiagram
 
 - CHECK constraints: `owners.kind` is `user` or `guest`; `users.email` equals `lower(btrim(email))`, so its unique constraint holds on the normalized form; `documents.status` is `pending`, `processing`, `ready` or `failed`, and `failed` requires a non-empty `error`; `messages.role` is `user` or `assistant`.
 - The partial index `ix_documents_pending_run_after` (on `run_after`, `WHERE status = 'pending'`) serves the worker's job-queue claim ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)). `chats` and `messages` have `(owner_id, created_at)` and `(chat_id, created_at)` indexes for listing.
-- `RESTRICT` on `documents` and `chats` blocks deleting an owner that still owns either, so a cascade never drops rows whose vectors, objects or checkpoints still exist. The guest purge deletes those first, then the rows, then the owner ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)).
+- `RESTRICT` on `documents` and `chats` blocks deleting an owner that still owns either, so a cascade never drops rows whose vectors or objects still exist. The guest purge deletes those first, then the rows, then the owner ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)).
 - The object key is not a column: it is `documents/<id>`, derived from the document's `id`.
 - `chunks.embedding` has no dimension, so changing `EMBED_MODEL` needs no migration; retrieval filters on `documents.embed_model`. There is no HNSW index for the MVP ([ADR 0006](../decisions/0006-vector-store.md)).
-- The LangGraph checkpoint tables live in the same database, but outside Alembic and this diagram.
 
 [Runtime self-healing rules](overview.md#runtime-self-healing-rules)

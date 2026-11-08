@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.middleware.origin import OriginMiddleware
-from app.api.routes import auth, documents, health, me
+from app.api.routes import auth, chats, documents, health, me
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
@@ -22,7 +23,15 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # FastAPI's default body echoes each error's `input` (passwords, questions) and `ctx`.
+    detail = [{"type": e["type"], "loc": e["loc"], "msg": e["msg"]} for e in exc.errors()]
+    return JSONResponse({"detail": detail}, status_code=422)
+
+
 app.include_router(auth.router)
+app.include_router(chats.router)
 app.include_router(documents.router)
 app.include_router(health.router)
 app.include_router(me.router)

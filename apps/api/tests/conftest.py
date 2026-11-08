@@ -18,21 +18,30 @@ from alembic.config import Config
 from fastapi import APIRouter, Request
 from fastapi.testclient import TestClient
 from httpx import Response
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.runnables import Runnable, RunnableLambda
 from llama_index.core import MockEmbedding
 from sqlalchemy import Connection, Engine, create_engine, inspect, make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from alembic import command
+from app.agents.state import Answer
+from app.agents.workflows import Grade
 from app.api.deps import DbSession, WriteOwner, client_ip_key
 from app.core import providers, storage
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.core.errors import AppError
+from app.repositories.vector.chunks import replace_chunks
+from app.schemas.chunks import EmbeddedChunk
 from app.services import url_fetch
 from app.services.owners import lock_write_owner
 from app.services.rate_limit import (
     auth_requests,
+    chat_messages,
     document_retries,
     guest_creations,
     login_failures,
@@ -157,6 +166,7 @@ def _reset_app_state() -> None:
     login_failures.cache_clear()
     url_fetches.clear()
     document_retries.clear()
+    chat_messages.clear()
     storage._client.cache_clear()
 
 
@@ -194,6 +204,85 @@ def mock_embeddings(app_env: None, monkeypatch: pytest.MonkeyPatch) -> list[Mock
 
     monkeypatch.setattr(providers, "get_embed_model", get_embed_model)
     return handed_out
+
+
+class _Grader:
+    def __init__(self, model: "StubChatModel") -> None:
+        self.model = model
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> Grade:
+        self.model.record(messages)
+        return Grade(relevant=self.model.grades.pop(0))
+
+
+class StubChatModel:
+    """Chat model stub: grades come from `grades` in order, other calls return `reply`.
+
+    `on_call` runs at every call, grades included.
+    """
+
+    def __init__(self) -> None:
+        self.grades: list[list[int]] = []
+        self.reply = "The answer."
+        self.calls: list[list[BaseMessage]] = []
+        self.on_call: Callable[[], None] = lambda: None
+
+    def record(self, messages: list[BaseMessage]) -> None:
+        self.on_call()
+        self.calls.append(messages)
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
+        self.record(messages)
+        return AIMessage(self.reply)
+
+    def with_structured_output(self, schema: type[Grade]) -> _Grader:
+        return _Grader(self)
+
+
+@pytest.fixture
+def chat_model(app_env: None, monkeypatch: pytest.MonkeyPatch) -> StubChatModel:
+    """Mock the chat model at the provider factory; set its `grades` and `reply` per test."""
+    model = StubChatModel()
+
+    def get_chat_model(settings: Settings) -> Any:
+        return model
+
+    monkeypatch.setattr(providers, "get_chat_model", get_chat_model)
+    return model
+
+
+FAIL_WORD = "<fail>"
+
+
+class StreamingChatModel(GenericFakeChatModel):
+    """Streams each reply word by word; grades are JSON replies, so they stream too.
+
+    A reply word FAIL_WORD raises instead, after the words before it were streamed.
+    """
+
+    def _stream(self, *args: Any, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        for chunk in super()._stream(*args, **kwargs):
+            if chunk.message.text == FAIL_WORD:
+                raise RuntimeError("provider failed mid-stream")
+            yield chunk
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Runnable[Any, Any]:
+        return self | RunnableLambda(lambda message: Grade.model_validate_json(message.text))
+
+
+@pytest.fixture
+def streaming_replies(app_env: None, monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """Mock the chat model at the provider factory with replies given in call order."""
+
+    def set_replies(*replies: str) -> None:
+        model = StreamingChatModel(messages=iter(AIMessage(reply) for reply in replies))
+
+        def get_chat_model(settings: Settings) -> Any:
+            return model
+
+        monkeypatch.setattr(providers, "get_chat_model", get_chat_model)
+
+    return set_replies
 
 
 NOTES_MD = b"# Notes\n"
@@ -417,6 +506,14 @@ def run[T](coro: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coro, loop_factory=asyncio.SelectorEventLoop)
 
 
+async def final_answer(stream: AsyncIterator[str | Answer]) -> Answer:
+    """Drain a streaming answer; assert that its last item is the only Answer, then return it."""
+    *tokens, final = [part async for part in stream]
+    assert all(isinstance(token, str) for token in tokens)
+    assert isinstance(final, dict)
+    return final
+
+
 def in_session[T](sessions: Sessions, call: Callable[[AsyncSession], Awaitable[T]]) -> T:
     """`call` in one committed session."""
 
@@ -467,6 +564,35 @@ def add_document(
     }
     with db_engine.begin() as conn:
         return conn.execute(text(sql), params).scalar_one()
+
+
+def axis(i: int, dims: int = 8) -> list[float]:
+    return [1.0 if d == i else 0.0 for d in range(dims)]
+
+
+def add_ready_document(
+    db_engine: Engine,
+    db_sessions: Sessions,
+    owner_id: UUID,
+    chunks: dict[str, list[float]],
+    *,
+    status: str = "ready",
+    model: str = "m8",
+    source: str = "doc.pdf",
+) -> UUID:
+    """A document embedded by `model` holding one chunk per text, with page = position + 1."""
+    id = add_document(db_engine, owner_id, status, source=source)
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE documents SET embed_model = :model WHERE id = :id"),
+            {"model": model, "id": id},
+        )
+    embedded = [
+        EmbeddedChunk(t, e, {"source": source, "page": n + 1})
+        for n, (t, e) in enumerate(chunks.items())
+    ]
+    in_session(db_sessions, lambda db: replace_chunks(db, id, embedded))
+    return id
 
 
 def row(db_engine: Engine, id: UUID) -> Any:
