@@ -31,6 +31,10 @@ dev = [
     "types-boto3[s3]>=1.43.126",
 ]
 
+[tool.uv]
+# nltk >= 3.10.3 refuses hardlinked data files (st_nlink > 1), and uv hardlinks from its cache by default.
+link-mode = "copy"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
