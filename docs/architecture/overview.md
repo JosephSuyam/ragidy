@@ -46,8 +46,8 @@ More diagrams: [diagrams.md](diagrams.md).
 
 ## Providers
 `app/core/providers.py` builds the models from `Settings` (`LLM_PROVIDER`/`LLM_MODEL`, `EMBED_PROVIDER`/`EMBED_MODEL`) ([ADR 0004](../decisions/0004-provider-factory.md)):
-- `get_chat_model(settings) -> BaseChatModel`: `anthropic`, `openai` or `ollama`.
-- `get_embed_model(settings) -> BaseEmbedding`: `openai` or `ollama`.
+- `get_chat_model(settings) -> BaseChatModel`: `anthropic`, `openai`, `ollama`, `google` (Google AI Studio, not Vertex AI) or `groq`.
+- `get_embed_model(settings) -> BaseEmbedding`: `openai` or `ollama`. A `google` or `groq` chat model still needs one of these for embeddings.
 
 It returns plain models, not wrapped, so agents can call `.with_structured_output` or `.bind_tools`. A missing API key raises `ValueError` naming the setting, never its value. Callers use `providers.get_chat_model(settings)` through the module, so tests mock models here.
 
