@@ -20,7 +20,7 @@ from sqlalchemy import Engine, text
 
 from app.core import providers
 from app.repositories import document_jobs
-from app.workers import ingestion
+from app.workers import ingestion, purge
 
 pytestmark = pytest.mark.integration
 
@@ -30,10 +30,11 @@ TEXT = "First sentence. " * 200  # long enough for several chunks
 
 @pytest.fixture
 def worker_db(db_sessions: Sessions, app_env: None, monkeypatch: pytest.MonkeyPatch) -> Sessions:
-    """Point the worker at the emptied test database, with EMBED_MODEL as the settings value."""
+    """Point the worker and its purge at the emptied test database; EMBED_MODEL as the setting."""
     monkeypatch.setenv("EMBED_MODEL", EMBED_MODEL)
     monkeypatch.setattr(ingestion, "get_sessionmaker", lambda: db_sessions)
     monkeypatch.setattr(ingestion, "get_engine", lambda: db_sessions.kw["bind"])
+    monkeypatch.setattr(purge, "get_sessionmaker", lambda: db_sessions)
     return db_sessions
 
 
@@ -223,7 +224,10 @@ def stop(_: int) -> None:
 
 @pytest.mark.usefixtures("worker_db", "mock_embeddings")
 def test_main_resets_interrupted_jobs_then_processes_until_idle(
-    db_engine: Engine, fake_storage: Objects, monkeypatch: pytest.MonkeyPatch
+    db_engine: Engine,
+    fake_storage: Objects,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     id = queue(
         db_engine, fake_storage, TEXT.encode(), "text/plain", status="processing", attempts=1
@@ -233,6 +237,8 @@ def test_main_resets_interrupted_jobs_then_processes_until_idle(
     with pytest.raises(_Stop):
         run(ingestion.main())
 
+    # The worker logs a purge failure and carries on, so only this check exposes an unpatched purge.
+    assert "Guest purge failed" not in caplog.text
     assert row(db_engine, id)[:4] == ("ready", 2, None, EMBED_MODEL)
     assert stored_chunks(db_engine, id) != []
     # main's lock connection closed on exit, so the lock is free again.
@@ -275,8 +281,99 @@ def test_main_retakes_the_lock_after_the_lock_connection_drops(
         run(ingestion.main())
 
     assert len(dropped) == 1
+    assert "Guest purge failed" not in caplog.text
     assert "Ingestion worker lost the database" in caplog.text
     assert caplog.text.count("Ingestion worker lock acquired") == 2
     assert row(db_engine, jobs[0])[:4] == ("ready", 1, None, EMBED_MODEL)
     # The new lock connection closed on exit, so the lock is free again.
     assert advisory_lock_pids(db_engine) == []
+
+
+class Clock:
+    """Stands in for the `time` module in the worker: `monotonic` returns `now`."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+@pytest.mark.usefixtures("worker_db")
+def test_purge_runs_at_startup_then_again_only_after_its_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = Clock()
+    purged_at: list[float] = []
+
+    async def purge_expired() -> int:
+        purged_at.append(clock.now)
+        return 0
+
+    def tick(poll: int) -> None:
+        if poll == 1:
+            clock.now = ingestion.PURGE_INTERVAL_SECONDS - 1  # not due yet
+        elif poll == 2:
+            clock.now = ingestion.PURGE_INTERVAL_SECONDS  # due now
+        else:
+            raise _Stop
+
+    monkeypatch.setattr(ingestion, "time", clock)
+    monkeypatch.setattr(ingestion, "purge_expired", purge_expired)
+    on_poll(monkeypatch, tick)
+
+    with pytest.raises(_Stop):
+        run(ingestion._run_locked())
+
+    assert purged_at == [0, ingestion.PURGE_INTERVAL_SECONDS]
+
+
+@pytest.mark.usefixtures("worker_db")
+def test_a_full_purge_batch_keeps_the_purge_due_on_the_next_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = Clock()
+    purged_at: list[float] = []
+    batches = iter([2, 0])
+
+    async def purge_expired() -> int:
+        purged_at.append(clock.now)
+        return next(batches)
+
+    def tick(poll: int) -> None:
+        if poll == 2:
+            raise _Stop
+
+    monkeypatch.setattr(ingestion, "time", clock)
+    monkeypatch.setattr(ingestion, "PURGE_BATCH", 2)
+    monkeypatch.setattr(ingestion, "purge_expired", purge_expired)
+    on_poll(monkeypatch, tick)
+
+    with pytest.raises(_Stop):
+        run(ingestion._run_locked())
+
+    # The clock never moved, so the second run only happened because the batch was full.
+    assert purged_at == [0, 0]
+
+
+@pytest.mark.usefixtures("worker_db", "mock_embeddings")
+def test_purge_failure_is_logged_by_type_and_jobs_keep_running(
+    db_engine: Engine,
+    fake_storage: Objects,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    id = queue(db_engine, fake_storage, TEXT.encode(), "text/plain")
+
+    async def purge_expired() -> int:
+        raise RuntimeError("https://example.com/x?token=purge-secret")
+
+    monkeypatch.setattr(ingestion, "purge_expired", purge_expired)
+    on_poll(monkeypatch, stop)
+
+    with caplog.at_level(logging.INFO, logger=ingestion.__name__), pytest.raises(_Stop):
+        run(ingestion._run_locked())
+
+    assert row(db_engine, id)[:4] == ("ready", 1, None, EMBED_MODEL)
+    assert "Guest purge failed (RuntimeError)" in caplog.text
+    assert "purge-secret" not in caplog.text

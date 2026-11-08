@@ -104,6 +104,24 @@ def test_me_with_guest_cookie_reports_expiry_and_document_count(
     assert datetime.fromisoformat(me["guest_expires_at"]) == expires_at
 
 
+def guest_expiry(db_engine: Engine) -> datetime:
+    with db_engine.connect() as conn:
+        return conn.execute(text("SELECT expires_at FROM guests")).scalar_one()
+
+
+@pytest.mark.usefixtures("fake_storage", "mock_embeddings", "chat_model")
+def test_activity_does_not_extend_guest_expiry(client: TestClient, db_engine: Engine) -> None:
+    write(client)
+    expires_at = guest_expiry(db_engine)
+
+    upload = client.post("/documents", files={"file": ("a.txt", b"hello", "text/plain")})
+    chat_id = client.post("/chats").json()["id"]
+    reply = client.post(f"/chats/{chat_id}/messages", json={"content": "anything?"})
+
+    assert (upload.status_code, reply.status_code) == (202, 200)
+    assert guest_expiry(db_engine) == expires_at
+
+
 def test_second_write_reuses_guest(client: TestClient, db_engine: Engine) -> None:
     first = write(client)
     second = write(client)

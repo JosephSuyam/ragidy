@@ -4,6 +4,7 @@ import os
 import uuid
 from collections.abc import Iterator
 from contextlib import suppress
+from typing import Any
 
 import boto3
 import pytest
@@ -90,30 +91,52 @@ def s3_env() -> dict[str, str]:
     return {name: os.environ[name] for name in S3_ENV if name in os.environ}
 
 
-@pytest.mark.integration
-def test_seaweedfs_round_trip_in_a_new_bucket(
+@pytest.fixture
+def seaweed(
     s3_env: dict[str, str], app_env: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
+) -> Iterator[tuple[Any, str]]:
+    """A new bucket on SeaweedFS, yielded as (client, name); its objects and bucket are removed."""
     for name, value in s3_env.items():
         monkeypatch.setenv(name, value)
     bucket = f"ragidy-test-{uuid.uuid4().hex[:12]}"
     monkeypatch.setenv("S3_BUCKET", bucket)
     s3 = storage._client()
     try:
-        put("documents/a", b"%PDF-1.7", "application/pdf")  # NoSuchBucket, then created
-        put("documents/b", b"hello", "text/plain")
-
-        head = s3.head_object(Bucket=bucket, Key="documents/a")
-        assert head["ContentType"] == "application/pdf"
-        got = s3.get_object(Bucket=bucket, Key="documents/b")
-        assert (got["Body"].read(), got["ContentType"]) == (b"hello", "text/plain")
-
-        asyncio.run(storage.delete_object("documents/a"))
-        with pytest.raises(ClientError) as info:
-            s3.head_object(Bucket=bucket, Key="documents/a")
-        assert info.value.response["Error"]["Code"] == "404"
+        yield s3, bucket
     finally:
+        for key in ("documents/a", "documents/b"):
+            with suppress(ClientError):
+                s3.delete_object(Bucket=bucket, Key=key)
         with suppress(ClientError):
-            s3.delete_object(Bucket=bucket, Key="documents/a")
-            s3.delete_object(Bucket=bucket, Key="documents/b")
             s3.delete_bucket(Bucket=bucket)
+
+
+@pytest.mark.integration
+def test_seaweedfs_round_trip_in_a_new_bucket(seaweed: tuple[Any, str]) -> None:
+    s3, bucket = seaweed
+    put("documents/a", b"%PDF-1.7", "application/pdf")  # NoSuchBucket, then created
+    put("documents/b", b"hello", "text/plain")
+
+    head = s3.head_object(Bucket=bucket, Key="documents/a")
+    assert head["ContentType"] == "application/pdf"
+    got = s3.get_object(Bucket=bucket, Key="documents/b")
+    assert (got["Body"].read(), got["ContentType"]) == (b"hello", "text/plain")
+
+    asyncio.run(storage.delete_object("documents/a"))
+    with pytest.raises(ClientError) as info:
+        s3.head_object(Bucket=bucket, Key="documents/a")
+    assert info.value.response["Error"]["Code"] == "404"
+
+
+@pytest.mark.integration
+def test_seaweedfs_delete_of_a_missing_key_does_not_raise(seaweed: tuple[Any, str]) -> None:
+    s3, bucket = seaweed
+    put("documents/a", b"hello", "text/plain")  # creates the bucket
+
+    asyncio.run(storage.delete_object("documents/missing"))
+    asyncio.run(storage.delete_object("documents/a"))
+    asyncio.run(storage.delete_object("documents/a"))  # already gone
+
+    with pytest.raises(ClientError) as info:
+        s3.head_object(Bucket=bucket, Key="documents/a")
+    assert info.value.response["Error"]["Code"] == "404"

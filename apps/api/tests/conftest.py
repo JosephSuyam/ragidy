@@ -33,8 +33,9 @@ from app.agents.workflows import Grade
 from app.api.deps import DbSession, WriteOwner, client_ip_key
 from app.core import providers, storage
 from app.core.config import Settings, get_settings
-from app.core.db import get_db
+from app.core.db import get_db, get_engine, get_sessionmaker
 from app.core.errors import AppError
+from app.repositories.chats import insert_chat, insert_user_message
 from app.repositories.vector.chunks import replace_chunks
 from app.schemas.chunks import EmbeddedChunk
 from app.services import url_fetch
@@ -50,6 +51,9 @@ from app.services.rate_limit import (
 
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 ORIGIN = "http://localhost:5173"  # Settings.public_base_url default
+# Any app DB connection a test did not patch fails fast here, never on the dev database.
+UNREACHABLE_DB_URL = "postgresql+psycopg://invalid@127.0.0.1:1/never"
+SERVER_URL = ""  # set by pytest_configure: the server throwaway databases are created on
 
 test_router = APIRouter(prefix="/_test")
 
@@ -124,7 +128,7 @@ def alembic_config(url: str) -> Config:
 @contextmanager
 def throwaway_db() -> Iterator[str]:
     """Create `ragidy_test_<hex>` migrated to head, yield its URL, then drop it."""
-    server_url = make_url(get_settings().database_url)
+    server_url = make_url(SERVER_URL)
     name = f"ragidy_test_{uuid.uuid4().hex}"
     admin = create_engine(server_url, isolation_level="AUTOCOMMIT")
     with admin.connect() as conn:
@@ -141,14 +145,17 @@ def throwaway_db() -> Iterator[str]:
 
 def pytest_configure(config: pytest.Config) -> None:
     # Runs before test modules import app.main, whose middleware reads settings at import.
+    global SERVER_URL
     Settings.model_config["env_file"] = None
     get_settings.cache_clear()
+    SERVER_URL = get_settings().database_url
 
 
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in Settings.model_fields:
-        monkeypatch.delenv(name.upper(), raising=False)
+        if name != "database_url":  # no_dev_database owns DATABASE_URL
+            monkeypatch.delenv(name.upper(), raising=False)
 
 
 @pytest.fixture
@@ -168,6 +175,28 @@ def _reset_app_state() -> None:
     document_retries.clear()
     chat_messages.clear()
     storage._client.cache_clear()
+    get_engine.cache_clear()
+    get_sessionmaker.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def no_dev_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Fail any app database access unless a test patches get_sessionmaker or sets its own URL.
+
+    Fails at engine creation, not on connect: on Windows a psycopg connect to a refused port hangs.
+    """
+    monkeypatch.setenv("DATABASE_URL", UNREACHABLE_DB_URL)
+
+    def guarded_engine(url: str, **kwargs: Any) -> Any:
+        if url == UNREACHABLE_DB_URL:
+            # pytest.fail raises a BaseException, so the worker's `except Exception` cannot hide it.
+            pytest.fail("test reached the app database without patching get_sessionmaker")
+        return create_async_engine(url, **kwargs)
+
+    monkeypatch.setattr("app.core.db.create_async_engine", guarded_engine)
+    _reset_app_state()
+    yield
+    _reset_app_state()
 
 
 Objects = dict[str, tuple[bytes, str]]
@@ -191,6 +220,20 @@ def fake_storage(monkeypatch: pytest.MonkeyPatch) -> Objects:
     monkeypatch.setattr(storage, "delete_object", delete_object)
     monkeypatch.setattr(storage, "get_object", get_object)
     return objects
+
+
+@pytest.fixture
+def deleted_keys(fake_storage: Objects, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Each key passed to `storage.delete_object`, in call order; the object is deleted as usual."""
+    keys: list[str] = []
+    delete = storage.delete_object
+
+    async def record(key: str) -> None:
+        keys.append(key)
+        await delete(key)
+
+    monkeypatch.setattr(storage, "delete_object", record)
+    return keys
 
 
 @pytest.fixture
@@ -531,6 +574,52 @@ def add_owner(db_engine: Engine) -> UUID:
         return conn.execute(
             text("INSERT INTO owners (kind) VALUES ('guest') RETURNING id")
         ).scalar_one()
+
+
+def add_guest(db_engine: Engine, expires_in: float) -> UUID:
+    """A guest owner whose guest row expires `expires_in` seconds from now (negative: expired)."""
+    owner = add_owner(db_engine)
+    with db_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO guests (owner_id, token, expires_at) VALUES "
+                "(:o, :t, now() + make_interval(secs => :s))"
+            ),
+            {"o": owner, "t": owner.bytes, "s": expires_in},
+        )
+    return owner
+
+
+def add_user(db_engine: Engine, session_expires_in: float = 100) -> UUID:
+    """A user owner with one session expiring in `session_expires_in` seconds."""
+    with db_engine.begin() as conn:
+        owner = conn.execute(
+            text("INSERT INTO owners (kind) VALUES ('user') RETURNING id")
+        ).scalar_one()
+        user = conn.execute(
+            text("INSERT INTO users (owner_id) VALUES (:o) RETURNING id"), {"o": owner}
+        ).scalar_one()
+        conn.execute(
+            text(
+                "INSERT INTO sessions (user_id, token, expires_at) VALUES "
+                "(:u, :t, now() + make_interval(secs => :s))"
+            ),
+            {"u": user, "t": owner.bytes, "s": session_expires_in},
+        )
+    return owner
+
+
+def owned_count(db_engine: Engine, table: str, owner: UUID) -> int:
+    with db_engine.connect() as conn:
+        return conn.execute(
+            text(f"SELECT count(*) FROM {table} WHERE owner_id = :o"), {"o": owner}
+        ).scalar_one()
+
+
+def add_chat_with_message(db_sessions: Sessions, owner: UUID) -> UUID:
+    chat = in_session(db_sessions, lambda db: insert_chat(db, owner, None)).id
+    assert in_session(db_sessions, lambda db: insert_user_message(db, owner, chat, "hi"))
+    return chat
 
 
 def add_document(
