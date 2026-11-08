@@ -2,7 +2,7 @@
 COMPOSE := docker compose $(if $(wildcard apps/api/.env),--env-file apps/api/.env) -f infrastructure/docker/docker-compose.yml
 CHECK := python infrastructure/scripts/check.py
 
-.PHONY: help install db s3 db-down migrate api worker web check fast check-api check-web up images
+.PHONY: help install db s3 db-down migrate api worker web check fast check-api check-web up images types
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -50,3 +50,7 @@ up: ## Run the full stack from production images (api :8000, web :8080)
 images: ## Build production images locally
 	docker build -f infrastructure/docker/api.Dockerfile -t ragidy-api .
 	docker build -f infrastructure/docker/web.Dockerfile -t ragidy-web .
+
+types: ## Regenerate shared API types from the OpenAPI schema
+	cd apps/api && uv run python ../../infrastructure/scripts/dump_openapi.py
+	cd packages/shared-types && npm ci && npm run gen
