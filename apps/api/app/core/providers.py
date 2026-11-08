@@ -1,5 +1,9 @@
+import os
+
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from llama_index.core.base.embeddings.base import BaseEmbedding
@@ -25,6 +29,13 @@ def _require(key: SecretStr, key_name: str, provider_setting: str, provider: str
     return key
 
 
+def _reject_vertex_env() -> None:
+    # google-genai reads these itself and would send the AI Studio key to Vertex.
+    for name in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE"):
+        if os.environ.get(name, "").lower() in ("true", "1"):
+            raise ValueError(f"{name} must be unset when LLM_PROVIDER=google")
+
+
 def get_chat_model(settings: Settings) -> BaseChatModel:
     match settings.llm_provider:
         case "anthropic":
@@ -43,6 +54,23 @@ def get_chat_model(settings: Settings) -> BaseChatModel:
                 api_key=_require(
                     settings.openai_api_key, "OPENAI_API_KEY", "LLM_PROVIDER", "openai"
                 ),
+                max_retries=MAX_RETRIES,
+                timeout=TIMEOUT_SECONDS,
+            )
+        case "google":
+            _reject_vertex_env()
+            return ChatGoogleGenerativeAI(
+                model=settings.llm_model,
+                google_api_key=_require(
+                    settings.google_api_key, "GOOGLE_API_KEY", "LLM_PROVIDER", "google"
+                ),
+                max_retries=MAX_RETRIES + 1,  # google-genai counts total attempts, not retries
+                timeout=TIMEOUT_SECONDS,
+            )
+        case "groq":
+            return ChatGroq(
+                model=settings.llm_model,
+                api_key=_require(settings.groq_api_key, "GROQ_API_KEY", "LLM_PROVIDER", "groq"),
                 max_retries=MAX_RETRIES,
                 timeout=TIMEOUT_SECONDS,
             )
