@@ -17,6 +17,7 @@ PARENT = {
     "sessions": "users",
     "oauth_accounts": "users",
     "documents": "owners",
+    "chunks": "documents",
     "chats": "owners",
     "messages": "chats",
 }
@@ -31,6 +32,8 @@ ROW_SQL = {
     "oauth_accounts": "INSERT INTO oauth_accounts (user_id, provider, provider_user_id) "
     "VALUES (:parent, 'github', '1')",
     "documents": "INSERT INTO documents (owner_id, source, embed_model) VALUES (:parent, 's', 'm')",
+    "chunks": "INSERT INTO chunks (document_id, position, text, embedding) "
+    "VALUES (:parent, 0, 't', '[1,2]')",
     "chats": "INSERT INTO chats (owner_id) VALUES (:parent)",
     "messages": "INSERT INTO messages (chat_id, role, content) VALUES (:parent, 'user', 'hi')",
 }
@@ -143,6 +146,11 @@ def test_server_defaults(conn: Connection) -> None:
     ).one()
     assert message.citations == [] and message.created_at is not None
 
+    chunk_metadata = conn.execute(
+        text(ROW_SQL["chunks"] + " RETURNING metadata"), parent_params(conn, "chunks")
+    ).scalar_one()
+    assert chunk_metadata == {}
+
 
 @pytest.mark.parametrize(("constraint", "table", "sql"), UNIQUES, ids=[c for c, *_ in UNIQUES])
 def test_unique_rejects_duplicate(conn: Connection, constraint: str, table: str, sql: str) -> None:
@@ -151,6 +159,14 @@ def test_unique_rejects_duplicate(conn: Connection, constraint: str, table: str,
     with pytest.raises(IntegrityError) as exc:
         conn.execute(text(sql), params)
     assert exc.value.orig.diag.constraint_name == constraint  # type: ignore[union-attr]
+
+
+def test_chunk_position_is_unique_per_document(conn: Connection) -> None:
+    document = insert_chain(conn, "chunks")["documents"]
+    conn.execute(text(ROW_SQL["chunks"]), parent_params(conn, "chunks"))  # same position elsewhere
+    with pytest.raises(IntegrityError) as exc:
+        conn.execute(text(ROW_SQL["chunks"]), {"parent": document})
+    assert exc.value.orig.diag.constraint_name == "uq_chunks_document_id_position"  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize(
@@ -190,6 +206,7 @@ def test_owner_delete_is_restricted_by(conn: Connection, child: str) -> None:
         ("owners", "guests"),
         ("users", "sessions"),
         ("users", "oauth_accounts"),
+        ("documents", "chunks"),
         ("chats", "messages"),
     ],
 )

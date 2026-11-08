@@ -12,27 +12,43 @@ Base URL in development: `http://localhost:8000`. The browser reaches the same p
 | GET | `/auth/providers` | `200 [{id, name}]` | Enabled OAuth providers: those with a client id set, and none when `AUTH_SECRET` is empty |
 | GET | `/auth/oauth/{provider}/start` | `302` to the provider | Authorization code with PKCE `S256`. `redirect_uri` is `<PUBLIC_BASE_URL>/api/auth/oauth/{provider}/callback`. Sets `ragidy_oauth`. Scopes: Google `openid email`, GitHub `user:email`. Errors: `404 not_found` for an unknown or disabled provider |
 | GET | `/auth/oauth/{provider}/callback` | `302 <PUBLIC_BASE_URL>/` | The provider redirects here with `code` and `state`. Sets `ragidy_session` like login and clears `ragidy_oauth`. Any failure redirects to `<PUBLIC_BASE_URL>/login?error=oauth_failed`, clears `ragidy_oauth`, and starts no session |
+| POST | `/documents` | `202 {id, source, status, error, attempts, created_at}` | Multipart body with one `file` part and no other part. `status` is `pending`. `source` is the filename without its directory, or `upload` when it is empty. Errors: `400`, `401 session_expired`, `409 document_limit_reached`, `413 too_large`, `415 unsupported_type`, `422`, `429 rate_limited`. See [Documents](#documents) |
+| POST | `/documents/url` | `202 {id, source, status, error, attempts, created_at}` | Body `{url}`, at most 2048 characters. `status` is `pending`. `source` is the URL as submitted. Errors: as `POST /documents` except `400`, plus `422 url_blocked` and `422 url_fetch_failed` |
+| GET | `/documents` | `200 [{id, source, status, error, attempts, created_at}]` | The owner's documents, newest first. `[]` with no cookie, or an unknown or expired one; never creates a guest |
+| GET | `/documents/{id}` | `200 {id, source, status, error, attempts, created_at}` | One of the owner's documents, for polling `status` and `error`. Errors: `404 not_found`, `422` |
+| POST | `/documents/{id}/retry` | `202 {id, source, status, error, attempts, created_at}` | Queues a `failed` or `ready` document again: `status` `pending`, `attempts` `0`, `error` `null`. Errors: `403 origin_mismatch`, `404 not_found`, `409 document_busy`, `422`, `429 rate_limited`. See [Documents](#documents) |
 
 Add each new endpoint here: method, path, request, response, and error codes.
 
 ## Errors
 - App errors return `{"code": "<code>", "detail": "<message>"}` with the status code.
 - `401 invalid_credentials`: a wrong password, an unknown or malformed email, and an account without a password all get this same response.
+- `401 session_expired`: the owner row was deleted (a guest purge or migration) while the request ran. Refresh with `GET /me` and retry.
 - `403 origin_mismatch`: every request except GET, HEAD and OPTIONS needs an `Origin` header exactly equal to `PUBLIC_BASE_URL` (CSRF guard). Scripts must send it, for example `curl -H "Origin: http://localhost:5173"`.
+- `404 not_found`: the document does not exist, belongs to another owner, or the request has no owner.
+- `409 document_busy`: the document is `pending` or `processing`, so a retry would race the worker.
 - `409 email_taken`: the email already has an account, including an OAuth-only one.
+- `409 document_limit_reached`: the owner already has `MAX_DOCS_<tier>` documents. The detail states the cap.
+- `413 too_large`: the file or fetched content is over `UPLOAD_MAX_MB_<tier>`.
+- `415 unsupported_type`: the type detected from the bytes is unknown, the file or fetched body is empty or only whitespace, or the type is not in `UPLOAD_TYPES_<tier>`. The detail lists the allowed types.
+- `422 url_blocked`: the URL is not http(s), holds credentials (`user:pass@`), or a hop resolves to an address that is not public.
+- `422 url_fetch_failed`: a timeout, a connection or DNS error, a malformed host, a non-2xx response, a `Content-Encoding` other than `identity`, or more than 3 redirects.
 - `429 rate_limited`: detail `Too many requests; try again later`. `Retry-After` holds the seconds to wait, as an integer. Sources:
   - Guest creation: `GUEST_CREATE_PER_IP_PER_HOUR` per client IP key.
   - Register and login together: `RATE_LIMIT_AUTH_PER_MINUTE` per client IP key.
   - Login lockout: `LOGIN_MAX_FAILURES` attempts per email and client IP key in `LOGIN_FAILURE_WINDOW_MINUTES`. Each attempt counts until one succeeds, which clears that email and IP's count. Once locked, even the right password gets `429`.
+  - URL fetches: `URL_FETCH_PER_HOUR` per owner, or per client IP key when the request has no owner yet. Every attempt counts, before the fetch, failed ones included.
+  - Document retries: `DOCUMENT_RETRY_PER_HOUR` per owner. Every attempt by an owner counts, before the status check, so a `404` or `409` takes a slot too.
 - All rate-limit counters are in memory, so they hold only for a single API process.
-- Request validation errors keep FastAPI's default `422` body.
+- Request validation errors keep FastAPI's default `422` body. A `POST /documents` without a `file` part gets that body too.
+- A malformed multipart body, or one with more than one file or any other part, gets Starlette's `400 {"detail": "<message>"}`, without a `code`.
 
 ## Guest cookie
 - `ragidy_guest` holds 32 random bytes (`secrets.token_urlsafe(32)`). The DB stores only its SHA-256 hash, in `guests.token`.
 - Attributes: `HttpOnly; SameSite=Lax; Path=/; Max-Age=GUEST_TTL_DAYS*86400`, plus `Secure` only when `PUBLIC_BASE_URL` uses `https`.
 - The server creates the guest and the cookie on the first write, never on a read.
 - One client IP key may create `GUEST_CREATE_PER_IP_PER_HOUR` guests an hour.
-- A failed first write (`422`, `413`, `415`, `409`, and so on) still counts against `GUEST_CREATE_PER_IP_PER_HOUR`, because the slot is taken before the write runs. No guest row is kept.
+- A document write creates the guest only after the body is read, its type checked and its object stored. A `413`, `415` or `422` therefore creates no guest and takes no `GUEST_CREATE_PER_IP_PER_HOUR` slot. A failure after that point still takes the slot, and no guest row is kept.
 - Send the first write alone and wait for the `ragidy_guest` cookie before sending parallel writes. Concurrent writes without the cookie each create their own guest, and the last `Set-Cookie` wins.
 
 ## Session cookie
@@ -48,3 +64,14 @@ Add each new endpoint here: method, path, request, response, and error codes.
 - GitHub's email is the `/user/emails` entry that is `primary` and `verified`; Google's needs `email_verified`.
 - The provider user id must be a non-empty string (GitHub's may also be a number). Any other value fails the callback with `oauth_failed`, so a null or empty id never maps sign-ins to one shared identity.
 - The API access log drops the callback query string, so the `code` is never logged. The web container turns off its access and error log for the callback path, and the Vite dev server drops the query from the URL it logs on a proxy error. A failed callback logs a reason code only.
+
+## Documents
+- Size: the upload body is read only up to the file limit plus a 16 KiB multipart allowance, and a larger body gets `413` as soon as it passes that. A `Content-Length` over it gets `413` before any read. The file itself may be at most the limit: exactly the limit is accepted.
+- Type: decided from the bytes, never the client `Content-Type`. Text is `html` when it starts, after any BOM and whitespace, with `<!doctype html`, `<html`, `<head` or `<body`. Other valid UTF-8 is `txt`, or `md` when the name ends in `.md`: the filename, or for a URL the final URL path after redirects. An empty or whitespace-only body gets `415`.
+- Order: the cap check runs and the read transaction is committed before the body is read or the URL fetched. Then the type check, then the object put to `documents/<id>` with the detected MIME type. Only then is a guest created (the first write), the owner row locked `FOR UPDATE`, the cap checked again and the row inserted. Any failure after the put deletes the object.
+- URL fetch: http(s) only. Every resolved address of every hop must be public (Python `is_global`, and not multicast, reserved or IPv6 site-local, so NAT64 `64:ff9b::/96` is blocked too; an IPv4-mapped IPv6 address is unwrapped first), else `422 url_blocked`. A URL with credentials (`user:pass@`), submitted or in a redirect, also gets `422 url_blocked`. The API connects to that vetted IP (IPv4 first, one IP tried) with the hostname as `Host` and TLS SNI. It follows at most 3 redirects and checks each hop again. It ignores proxy env vars. The whole fetch, redirects included, has one deadline, `URL_FETCH_TIMEOUT_SECONDS`. It sends `Accept-Encoding: identity` and counts the raw bytes; a response with any other `Content-Encoding` gets `422 url_fetch_failed`.
+- Storage: the bucket `S3_BUCKET` is created, private, on the first upload that finds it missing. That create sends no `LocationConstraint`, so on AWS outside `us-east-1` create the bucket first.
+- Ingestion: the worker (`make worker`) moves `status` from `pending` through `processing` to `ready` or `failed`. On `failed`, `error` holds a short user-safe message, never the raw exception. Poll `GET /documents/{id}` for the outcome. Retry rules: [overview](../architecture/overview.md#runtime-self-healing-rules).
+- Behind the web container (`make up`), nginx accepts bodies up to `6m` on `/api/documents` only; every other route keeps nginx's `1m` default. Raising any `UPLOAD_MAX_MB_*` above 5 needs `client_max_body_size` in `infrastructure/docker/nginx.conf` raised too, above the largest limit plus 16 KiB.
+- Accepted risks:
+  - A failed URL fetch takes no document slot; `URL_FETCH_PER_HOUR` bounds how often an owner can make the server fetch.

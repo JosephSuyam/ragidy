@@ -1,6 +1,6 @@
 name: ragidy
 
-# Shared by api and migrate, so migrations run with the same image and env as the app.
+# Shared by api, worker and migrate, so migrations and ingestion run with the same image and env as the app.
 x-api: &api
   profiles: [app]
   build:
@@ -63,9 +63,23 @@ services:
     ports:
       - "8000:8000"
     networks: [default, proxy]
-    # shortcut: api does not wait for seaweedfs; add depends_on service_healthy when the storage client lands.
     depends_on:
       db:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Ingestion worker: one instance only (Postgres advisory lock). No restart policy, like api,
+  # so a second worker that finds the lock held exits instead of looping.
+  worker:
+    <<: *api
+    command: ["python", "-m", "app.workers.ingestion"]
+    depends_on:
+      db:
+        condition: service_healthy
+      seaweedfs:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully

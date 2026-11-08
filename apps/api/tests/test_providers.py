@@ -55,6 +55,7 @@ def test_embed_model_per_provider(provider: str, cls: type) -> None:
     model = providers.get_embed_model(load(embed_provider=provider, embed_model=EMBED_MODEL))
     assert isinstance(model, cls)
     assert model.model_name == EMBED_MODEL
+    assert model.num_workers == providers.EMBED_WORKERS
     if isinstance(model, OpenAIEmbedding):
         assert (model.max_retries, model.timeout) == (1, 60.0)
 

@@ -70,9 +70,10 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [ ] An upload, URL, chat-creation or message request that reaches its insert after the guest's `owners` row was deleted by the migration returns `401 session_expired` and leaves no row or object (R9, R12).
 
 ### R7 Upload size and types per tier
-- [ ] A file larger than `UPLOAD_MAX_MB_<tier> × 1024 × 1024` bytes returns `413 too_large`. The server stops reading at limit + 1 byte and writes no object and no row. A file of exactly the limit is accepted.
-- [ ] The type is decided from the bytes, never the client `Content-Type` header. A detected type whose name is not in `UPLOAD_TYPES_<tier>` returns `415 unsupported_type`.
-- [ ] Type names map to MIME types in `app/core`:
+- [x] A file larger than `UPLOAD_MAX_MB_<tier> × 1024 × 1024` bytes returns `413 too_large` and writes no object and no row. The server reads the request body only up to the limit plus a 16 KiB multipart allowance and returns `413` as soon as the body passes it, or before reading when `Content-Length` is over it. A file of exactly the limit is accepted.
+- [x] The type is decided from the bytes, never the client `Content-Type` header. A detected type whose name is not in `UPLOAD_TYPES_<tier>` returns `415 unsupported_type`.
+- [x] An empty or whitespace-only file or fetched body returns `415 unsupported_type`. Text is `html` when it starts, after any BOM and whitespace, with `<!doctype html`, `<html`, `<head` or `<body`; other valid UTF-8 is `txt`, or `md` by a `.md` filename or final URL path.
+- [x] Type names map to MIME types in `app/core`:
 
   | Name | Server-detected MIME |
   |---|---|
@@ -81,19 +82,21 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
   | `txt` | `text/plain` |
   | `md` | `text/markdown`, or `text/plain` when the filename or URL path ends in `.md` |
   | `html` | `text/html` |
-- [ ] At startup, an unknown name (for example `UPLOAD_TYPES_GUEST=pdf,exe`) or an empty list fails with an error that names the setting and the value. Names are trimmed and lowercased.
+- [x] At startup, an unknown name (for example `UPLOAD_TYPES_GUEST=pdf,exe`) or an empty list fails with an error that names the setting and the value. Names are trimmed and lowercased.
 - [ ] `GET /me` returns the owner's tier limits: `max_upload_mb`, `upload_types`, `max_docs` and `chat_messages_per_hour`. The UI uses them to reject a file by size or type before it uploads; the server still enforces every limit.
 
 ### R8 URL ingestion limits
-- [ ] Fetched URL content over `UPLOAD_MAX_MB_<tier>` MiB returns `413 too_large`, stops reading at limit + 1 byte, and writes nothing.
-- [ ] The fetched bytes pass the same type check as R7.
-- [ ] A non-http(s) URL, or a private, loopback or link-local IP on the connected address or any redirect hop, returns `422 url_blocked` (ADR 0002).
-- [ ] A timeout or a non-2xx response returns `422 url_fetch_failed`.
+- [x] Fetched URL content over `UPLOAD_MAX_MB_<tier>` MiB returns `413 too_large` and writes nothing. The fetch sends `Accept-Encoding: identity` and counts the raw bytes, and reading stops at the first chunk past the limit.
+- [x] The fetched bytes pass the same type check as R7.
+- [x] A non-http(s) URL, or a hop with any resolved address that is not public (private, loopback, link-local, multicast, reserved or IPv6 site-local; an IPv4-mapped IPv6 address is unwrapped first), returns `422 url_blocked` (ADR 0002). The server connects to the vetted IP, not the hostname, with the hostname as `Host` and TLS SNI, and checks every redirect hop again, at most 3.
+- [x] A timeout (`URL_FETCH_TIMEOUT_SECONDS` for the whole fetch, redirects included), a connection or DNS error, a non-2xx response or more than 3 redirects returns `422 url_fetch_failed`.
+- [x] A URL with credentials (`user:pass@`), submitted or in a redirect, returns `422 url_blocked`. NAT64 addresses (`64:ff9b::/96`) are reserved, so they are blocked. A malformed host (a bad DNS label) or a response with a `Content-Encoding` other than `identity` returns `422 url_fetch_failed`.
+- [x] An owner, or a client IP key with no owner yet, may start `URL_FETCH_PER_HOUR` URL fetches an hour. Every attempt counts, before the fetch. Over that, `POST /documents/url` returns `429 rate_limited` with `Retry-After`.
 
 ### R9 Document caps
-- [ ] Given an owner with `MAX_DOCS_<tier>` documents in any status, when they upload or add a URL, then the response is `409 document_limit_reached`, the message states the cap, there is no row, and the object is removed.
-- [ ] The cap is checked before the body is read, and again at insert. The service writes the object first. Then, in one transaction, it takes `SELECT ... FOR UPDATE` on the owner's `owners` row, counts documents and inserts the row, so concurrent uploads never exceed the cap.
-- [ ] If the cap check or the insert fails, the service deletes the object it wrote. If the owner row is gone (the guest was purged or migrated mid-request), the upload fails the same way with `401 session_expired`; the client refreshes its session state (`GET /me`) and retries. A crash between the write and the delete leaves an orphan object, which ADR 0002 accepts as harmless.
+- [x] Given an owner with `MAX_DOCS_<tier>` documents in any status, when they upload or add a URL, then the response is `409 document_limit_reached`, the message states the cap, there is no row, and the object is removed.
+- [x] The cap is checked before the body is read, and again at insert. The read transaction is committed before the body is read or the URL fetched. The service writes the object first, and only then creates a guest when there is none. Then, in one transaction, it takes `SELECT ... FOR UPDATE` on the owner's `owners` row, counts documents and inserts the row, so concurrent uploads never exceed the cap.
+- [x] If the cap check or the insert fails, the service deletes the object it wrote. If the owner row is gone (the guest was purged or migrated mid-request), the upload fails the same way with `401 session_expired`; the client refreshes its session state (`GET /me`) and retries. A crash between the write and the delete leaves an orphan object, which ADR 0002 accepts as harmless.
 - [ ] Deleting a document frees a slot.
 
 ### R10 Guest expiry
@@ -103,9 +106,9 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [ ] The same purge deletes expired sessions.
 
 ### R11 Ingestion status and retry
-- [ ] Upload and URL return `202` with the document and status `pending`. `GET /documents/{id}` shows `status`, `error` and `attempts`.
-- [ ] Status moves `pending → processing → ready | failed`, with 3 attempts in total (ADR 0002). A `failed` document has a non-empty `error`.
-- [ ] `POST /documents/{id}/retry` on a `failed` or `ready` document returns `202` with status `pending` and `attempts` 0. On `pending` or `processing` it returns `409 document_busy`.
+- [x] Upload and URL return `202` with the document and status `pending`. `GET /documents/{id}` shows `status`, `error` and `attempts`.
+- [x] Status moves `pending → processing → ready | failed`, with 3 attempts in total (ADR 0002). A `failed` document has a non-empty `error`.
+- [x] `POST /documents/{id}/retry` on a `failed` or `ready` document returns `202` with status `pending` and `attempts` 0. On `pending` or `processing` it returns `409 document_busy`. An owner may make `DOCUMENT_RETRY_PER_HOUR` retry attempts an hour; every attempt counts, and over that it returns `429 rate_limited` with `Retry-After`.
 - [ ] The UI shows each document's status and a retry action on `failed`.
 
 ### R12 Chat with citations
@@ -141,8 +144,8 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 | GET | `/auth/providers` | none | `200 [{id, name}]` | none |
 | GET | `/auth/oauth/{provider}/start` | none | `302` to the provider, sets `ragidy_oauth` | `404` |
 | GET | `/auth/oauth/{provider}/callback` | `code`, `state` | `302 <PUBLIC_BASE_URL>/`, sets `ragidy_session` | `302 <PUBLIC_BASE_URL>/login?error=oauth_failed` |
-| POST | `/documents` | multipart `file` | `202 {document}` | `401 session_expired` (owner gone mid-request), `409 document_limit_reached`, `413 too_large`, `415 unsupported_type`, `429 rate_limited` (guest creation) |
-| POST | `/documents/url` | `{url}` | `202 {document}` | as above, plus `422 url_blocked`, `422 url_fetch_failed` |
+| POST | `/documents` | multipart `file` | `202 {document}` | `400` (malformed multipart), `401 session_expired` (owner gone mid-request), `409 document_limit_reached`, `413 too_large`, `415 unsupported_type`, `429 rate_limited` (guest creation) |
+| POST | `/documents/url` | `{url}` (at most 2048 characters) | `202 {document}` | as above except `400`, plus `422 url_blocked`, `422 url_fetch_failed`, `429 rate_limited` (URL fetches) |
 | GET | `/documents` | none | `200 [{document}]` | none |
 | GET | `/documents/{id}` | none | `200 {document}` | none |
 | POST | `/documents/{id}/retry` | none | `202 {document}` | `409 document_busy` |
@@ -159,7 +162,7 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 
 ### Security
 - [x] Passwords are hashed with argon2id (`argon2-cffi` defaults); plain passwords are never logged or stored. Hash and verify run in a threadpool behind a fixed concurrency cap (an internal constant, not config), because each call is CPU-bound and takes about 64 MiB.
-- [ ] Rate limits: `POST /auth/register` and `POST /auth/login` allow `RATE_LIMIT_AUTH_PER_MINUTE` requests a minute per client IP key. Login allows `LOGIN_MAX_FAILURES` failures per `LOGIN_FAILURE_WINDOW_MINUTES` minutes per (email, client IP key), so an attacker on another IP cannot lock out a victim. Guest creation (R1) and chat messages (R12) have their own limits. Excess returns `429 rate_limited` with `Retry-After`.
+- [ ] Rate limits: `POST /auth/register` and `POST /auth/login` allow `RATE_LIMIT_AUTH_PER_MINUTE` requests a minute per client IP key. Login allows `LOGIN_MAX_FAILURES` failures per `LOGIN_FAILURE_WINDOW_MINUTES` minutes per (email, client IP key), so an attacker on another IP cannot lock out a victim. Guest creation (R1), URL fetches (R8) and chat messages (R12) have their own limits. Excess returns `429 rate_limited` with `Retry-After`.
   shortcut: the counters live in memory per API process, so they reset on restart and only work with one API process; move them to Postgres before running more than one API process.
   Each check prunes expired windows, so keys built from random emails or rotated IPs do not grow memory without limit.
   The chat counter is keyed by owner, so it starts fresh after the guest-to-user migration (R6). This is accepted.
@@ -167,12 +170,13 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 - [ ] Rate-limit IP key: every per-IP limit (guest creation, auth requests, login failures) keys an IPv4 client by its full address and an IPv6 client by its `/64` prefix, because one IPv6 client controls a whole `/64` and could rotate through it. An IPv4-mapped IPv6 peer (`::ffff:a.b.c.d`) is first unwrapped with `ipaddress.IPv6Address.ipv4_mapped` and keyed by that full IPv4 address. The key function never raises: ASGI allows `scope["client"]` to be `None`, so a missing peer is keyed by one shared key, `"unknown"`, and a peer host that is not a valid IP (Starlette's TestClient sends `"testclient"`) is keyed by its raw host string. The test `test_non_ip_peer_keyed_without_error` shows that both cases return a key and raise no error. The test `test_ipv6_same_64_shares_counter` shows that two requests from different addresses in the same IPv6 `/64` share one counter. The test `test_ipv4_mapped_keyed_as_ipv4` shows that a mapped peer shares a counter with the same IPv4 address, and not with other IPv4 clients.
 - [x] CSRF: cookies are `SameSite=Lax`, and middleware in `app/api/middleware` rejects every POST, PUT, PATCH and DELETE whose `Origin` header is missing or differs from the origin of `PUBLIC_BASE_URL`, with `403 origin_mismatch`. The comparison is an exact string match against the normalized `PUBLIC_BASE_URL` (Configurability).
 - [ ] Owner isolation: every repository function for documents and chats that routes or services call takes `owner_id` and puts it in the `WHERE` clause. The worker queries (claim, startup reset, status updates of status, attempts and error, object-key reads by document id, purge) are the only exemptions, named as such and called only from `app/workers`. Retrieval gets only the owner's document ids as plain data. A two-owner test covers read, retry, delete and chat citations.
-- [ ] SSRF: URL fetching follows ADR 0002 (http(s) only, no private, loopback or link-local IPs on the connected address or any redirect hop, timeout, size cap).
+- [ ] SSRF: URL fetching follows ADR 0002 and R8 (http(s) only, only public IPs on the connected address and every redirect hop, one deadline, size cap). Proxy env vars are ignored.
+  Accepted risk: a failed fetch takes no document slot, so `URL_FETCH_PER_HOUR` is what bounds fetches.
 - [ ] At startup, a provider with a client id but no client secret, any enabled provider with an empty `AUTH_SECRET`, or a set `AUTH_SECRET` shorter than 32 characters fails with an error that names the setting.
 - [ ] Before the public guest tier is deployed, the internal SeaweedFS ports are hardened as ADR 0002 requires (its deferred `-filer.disableHttp` or separate-network step).
 
 ### Configurability
-Every limit is read from env through `Settings` (`app/core`). Integers must be 1 or more, and each `TRUSTED_PROXIES` entry must be an IP or CIDR, or startup fails. Each entry is normalized to a network string (`10.0.0.0/8` stays as is, `192.168.1.1` becomes `192.168.1.1/32`), the form `ProxyHeadersMiddleware` takes.
+Every limit is read from env through `Settings` (`app/core`). Integers must be 1 or more, `URL_FETCH_TIMEOUT_SECONDS` must be above 0, and each `TRUSTED_PROXIES` entry must be an IP or CIDR, or startup fails. Each entry is normalized to a network string (`10.0.0.0/8` stays as is, `192.168.1.1` becomes `192.168.1.1/32`), the form `ProxyHeadersMiddleware` takes.
 
 | Env var | Default | Meaning |
 |---|---|---|
@@ -184,6 +188,7 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 | `MAX_DOCS_USER` | `20` | User document cap |
 | `GUEST_TTL_DAYS` | `7` | Days from guest creation until its data is hidden and purged |
 | `SESSION_TTL_DAYS` | `30` | Days a login session lasts |
+| `URL_FETCH_TIMEOUT_SECONDS` | `10` | Deadline for a whole URL fetch, redirects included, in seconds (decimals allowed) |
 | `AUTH_SECRET` | empty | Signs the short-lived OAuth state and PKCE cookie; at least 32 characters when set; required when any OAuth provider is enabled |
 | `PUBLIC_BASE_URL` | `http://localhost:5173` | The web origin the browser uses; builds the OAuth redirect URI `<PUBLIC_BASE_URL>/api/auth/oauth/{provider}/callback` and post-login redirects; its origin is the only allowed `Origin`. Normalized to a lowercase scheme and host with the default port dropped, so the `Origin` check compares exact strings. `https` adds `Secure` to every cookie |
 | `OAUTH_GOOGLE_CLIENT_ID` | empty | Enables Google when set |
@@ -195,8 +200,12 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 | `LOGIN_FAILURE_WINDOW_MINUTES` | `15` | Window for `LOGIN_MAX_FAILURES`, in minutes |
 | `TRUSTED_PROXIES` | empty | Comma-separated IPs or CIDRs whose forwarded headers count, normalized to network strings; empty ignores forwarded headers |
 | `GUEST_CREATE_PER_IP_PER_HOUR` | `10` | Guests one client IP key (IPv4 address or IPv6 `/64`) may create per hour |
+| `URL_FETCH_PER_HOUR` | `20` | URL fetch attempts per owner, or per client IP key with no owner yet, per hour |
+| `DOCUMENT_RETRY_PER_HOUR` | `10` | Document retry attempts per owner per hour; each retry re-embeds the whole document |
 | `CHAT_MESSAGES_PER_HOUR_GUEST` | `20` | Chat messages per guest per hour |
 | `CHAT_MESSAGES_PER_HOUR_USER` | `100` | Chat messages per user per hour |
+
+The web container's nginx accepts bodies up to `6m` on `/api/documents` only. Raising any `UPLOAD_MAX_MB_*` above 5 needs its `client_max_body_size` raised too, above the largest limit plus 16 KiB.
 
 ### Privacy
 - [ ] A guest's documents, objects, vectors, chats and checkpoints are purged after `GUEST_TTL_DAYS` (R10), and hidden from the moment the guest expires.
@@ -206,7 +215,7 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 ## Folder ownership
 - Routes: `app/api/routes`. Origin check: `app/api/middleware`. `ProxyHeadersMiddleware` setup: `app/main.py`. In-memory rate-limit counters: `app/services`.
 - Auth, session, guest and migration logic: `app/services`. Queries: `app/repositories`. Tables: `app/models`.
-- OAuth provider entries, the type-to-MIME map and `Settings`: `app/core`.
+- OAuth provider entries, the type-to-MIME map, the S3 client and `Settings`: `app/core`. URL validation and fetch: `app/services`.
 - Guest and session purge: `app/workers`, calling `app/rag/indexing` (vectors), `app/agents/memory` (checkpoints), `app/core` (objects) and `app/repositories` (rows).
 - Web sign-in, register and logout: `apps/web/src/features/authentication`.
 - `--no-proxy-headers` on the API run command (devops, build step): `infrastructure/docker` and `Makefile`.

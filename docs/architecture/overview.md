@@ -11,8 +11,9 @@ flowchart LR
   svc -->|"documents row, status pending"| queue[("Job queue: documents rows in Postgres")]
   queue -->|"claim, SKIP LOCKED (app/repositories)"| worker["Worker (app/workers)"]
   objstore -->|"raw file"| worker
-  worker -->|"bytes, MIME type"| ingest["Ingestion: LlamaIndex<br/>Load (app/rag/ingestion)<br/>Parse (app/rag/parsers)<br/>Chunk (app/rag/chunking)<br/>Embed (app/rag/embeddings)<br/>Index (app/rag/indexing)"]
-  ingest --> pg[("pgvector")]
+  worker -->|"bytes, MIME type"| ingest["Ingestion: LlamaIndex<br/>Parse (app/rag/parsers)<br/>Chunk (app/rag/chunking)<br/>Embed (app/rag/ingestion)"]
+  ingest -->|"EmbeddedChunk list"| worker
+  worker -->|"replace chunks (app/repositories/vector)"| pg[("pgvector: chunks table")]
   q["question"] --> agent["Agent: LangGraph (app/agents/workflows)<br/>Memory (app/agents/memory)"] --> retrieve["Retrieve: LlamaIndex (app/rag/retrieval, app/rag/reranking)"] --> grade{"grade_chunks (app/agents/workflows)"} --> generate["Generate (app/agents/workflows)"] --> out["streamed answer + citations"]
   grade -->|"rewrite_query (app/agents/workflows)"| retrieve
 ```
@@ -22,11 +23,11 @@ More diagrams: [diagrams.md](diagrams.md).
 | Stage | Owner | Module |
 |---|---|---|
 | Validate against the owner's tier limits, fetch the URL, store the raw file, queue the job | Services: S3 client from `app/core`, `documents` row via `app/repositories` | `app/services` |
-| Claim the job, ingest, track status | Worker loop, `SKIP LOCKED` claim query, LlamaIndex readers | `app/workers`, `app/repositories`, `app/rag/ingestion` |
-| Parse (PDF, DOCX, HTML) | LlamaIndex readers | `app/rag/parsers` |
+| Claim the job, ingest, track status | Worker loop, `SKIP LOCKED` claim query, then parse, chunk and embed through one entry point | `app/workers`, `app/repositories`, `app/rag/ingestion` |
+| Parse (PDF, DOCX, HTML, text) | pypdf and the stdlib (`zipfile`, `xml.etree`, `html.parser`); a LlamaIndex `Document` is only the container | `app/rag/parsers` |
 | Chunk | LlamaIndex node parsers | `app/rag/chunking` |
-| Embed | Provider factory, then LlamaIndex embedding | `app/rag/embeddings` |
-| Index | LlamaIndex `PGVectorStore` | `app/rag/indexing` |
+| Embed | LlamaIndex embedding model from `app/core/providers.py`, called from ingestion; `app/rag/embeddings` is still an empty placeholder | `app/rag/ingestion` |
+| Index | `chunks` table, pgvector `Vector` column via SQLAlchemy ([ADR 0006](../decisions/0006-vector-store.md)) | `app/repositories/vector` |
 | Retrieve, rerank | LlamaIndex retrievers and postprocessors | `app/rag/retrieval`, `app/rag/reranking` |
 | Workflow: grade, rewrite, generate | LangGraph + LangChain chat models | `app/agents/workflows` |
 | Memory | LangGraph Postgres checkpointer | `app/agents/memory` |
@@ -63,9 +64,13 @@ Every piece of app code must follow these rules.
    - After that, it answers "not found in the document" instead of guessing.
 4. **Grounded answers only.** Every answer cites the chunks it used. When retrieval returns nothing, say so; never answer from model memory.
 5. **Ingestion status.** Each document moves through `pending → processing → ready | failed` and stores an `error` field.
-   - Ingestion gets 3 attempts in total, with backoff between them. After a failure, the row goes back to `pending` while `attempts < 3`, and becomes `failed` with its error after that.
+   - One worker process runs the jobs: `make worker` (`python -m app.workers.ingestion`), or the compose `worker` service. It takes a Postgres advisory lock at startup and exits if another worker holds it. When the database drops, it reconnects and takes the lock again before it claims another job ([ADR 0006](../decisions/0006-vector-store.md)).
+   - Provider, object storage and timeout errors get 3 attempts in total, with a backoff of 30 s, then 2 min. After a failure, the row goes back to `pending` while `attempts < 3`, and becomes `failed` with its error after that.
+   - An `IngestionError` (unusable input, such as an unreadable or password-protected file, or no readable text) sets `failed` at once, with no retry.
+   - Each job runs under a 600 s timeout, which counts as a failed attempt.
+   - `documents.error` is shown to users, so it holds only a fixed user-safe message (the `IngestionError` text, "Ingestion timed out." or "Ingestion failed."), never the raw exception. The worker logs the full exception with the document id.
    - Retries re-read the raw file from object storage. At startup, the single worker sets `processing` rows with `attempts >= 3` to `failed` with the error "worker stopped during the last attempt", and resets every other `processing` row to `pending` ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)).
-   - The UI shows the status and offers a retry. A manual retry or re-index resets only a `failed` or `ready` row; a `pending` or `processing` row is not touched, and the API returns 409 Conflict ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)).
+   - The UI shows the status and offers a retry. A manual retry (`POST /documents/{id}/retry`) or re-index resets only a `failed` or `ready` row and clears its `error`; a `pending` or `processing` row is not touched, and the API returns 409 Conflict ([ADR 0002](../decisions/0002-object-storage-and-job-queue.md)).
 6. **Fail safe at the boundary.**
    - Validate uploads with the owner's tier size limit and type allowlist, checked on the server-detected type, never the client `Content-Type` header ([requirements.md](requirements.md)).
    - Validate URLs: http(s) only, no private, loopback or link-local IPs (SSRF), with a timeout and the tier's size cap. Check the IP actually connected to and every redirect hop (or refuse redirects). Validation and fetch live together in `app/services`.
@@ -80,7 +85,7 @@ Tables, columns and keys: [Database schema](diagrams.md#database-schema).
   - The row is the ingestion job. The worker claims it with `SELECT ... FOR UPDATE SKIP LOCKED`.
   - The object key is not stored: it is `documents/<id>`, derived from the row's `id`, which the service generates before the object write. It never comes from the filename, URL or any user input; the original filename or URL is kept only in `source`.
 - Object storage (SeaweedFS, or any S3-compatible store): one object per document at `documents/<id>`, the raw upload or fetched URL content, with the server-detected MIME type as its `Content-Type`
-- Vector table: managed by LlamaIndex `PGVectorStore`, with `document_id` in its metadata
+- `chunks`: id, document_id (deleted with its document), position (unique per document), text, metadata (JSON), embedding (`vector` with no dimension, so retrieval filters on `documents.embed_model`). Created in Alembic; owner isolation comes from the join to `documents` ([ADR 0006](../decisions/0006-vector-store.md)).
 - `chats`: id (also the LangGraph thread id), owner_id, title, created_at
 - `messages`: id, chat_id (deleted with its chat), role (`user` or `assistant`), content, citations (JSON, default `[]`), created_at. This is the chat history the API returns.
 - LangGraph checkpointer tables: one thread per chat

@@ -2,7 +2,7 @@
 COMPOSE := docker compose $(if $(wildcard apps/api/.env),--env-file apps/api/.env) -f infrastructure/docker/docker-compose.yml
 CHECK := python infrastructure/scripts/check.py
 
-.PHONY: help install db s3 db-down migrate api web check fast check-api check-web up images
+.PHONY: help install db s3 db-down migrate api worker web check fast check-api check-web up images
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -26,10 +26,13 @@ migrate: ## Apply DB migrations (needs make db)
 api: ## Run the API with reload on :8000
 	cd apps/api && uv run fastapi dev app/main.py --no-proxy-headers
 
+worker: ## Run the ingestion worker (needs make db, make s3, make migrate)
+	cd apps/api && uv run python -m app.workers.ingestion
+
 web: ## Run the web dev server on :5173
 	cd apps/web && npm run dev
 
-check: ## Full quality gate (needs `make db` for integration tests)
+check: ## Full quality gate (needs `make db` and `make s3` for integration tests)
 	$(CHECK)
 
 fast: ## Quality gate without integration tests
