@@ -1,5 +1,6 @@
 """Corrective RAG graph: retrieve -> grade_chunks -> (generate | rewrite_query -> retrieve)."""
 
+from collections.abc import AsyncIterator
 from html import escape
 from typing import Any, Literal
 
@@ -156,9 +157,35 @@ _builder.add_edge("not_found", END)
 graph = _builder.compile()
 
 
+def _start(question: str) -> CorrectiveRagState:
+    return {"question": question, "query": question, "rewrites": 0}
+
+
 async def answer(question: str, retrieve: Retrieve) -> Answer:
-    state = await graph.ainvoke(
-        {"question": question, "query": question, "rewrites": 0},
-        context=AnswerContext(retrieve=retrieve),
-    )
+    state = await graph.ainvoke(_start(question), context=AnswerContext(retrieve=retrieve))
     return Answer(answer=state["answer"], citations=state["citations"])
+
+
+async def stream_answer(question: str, retrieve: Retrieve) -> AsyncIterator[str | Answer]:
+    """Yield the generate node's text tokens, then exactly one final Answer.
+
+    The final Answer always carries the full answer text. A model that does not stream
+    yields its whole text as one str. Not-found answers yield no str, so a caller that got
+    no str before the Answer emits `answer["answer"]` as one token. Grader and rewrite
+    tokens are never yielded.
+    """
+    async for part in graph.astream(
+        _start(question),
+        context=AnswerContext(retrieve=retrieve),
+        stream_mode=["messages", "updates"],
+        version="v2",
+    ):
+        if part["type"] == "messages":
+            chunk, metadata = part["data"]
+            if metadata["langgraph_node"] == "generate" and (text := chunk.text):
+                yield text
+        elif part["type"] == "updates" and (
+            update := part["data"].get("generate") or part["data"].get("not_found")
+        ):
+            # Both are terminal nodes, so their update is the last event of the run.
+            yield Answer(answer=update["answer"], citations=update["citations"])

@@ -18,7 +18,10 @@ from alembic.config import Config
 from fastapi import APIRouter, Request
 from fastapi.testclient import TestClient
 from httpx import Response
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.runnables import Runnable, RunnableLambda
 from llama_index.core import MockEmbedding
 from sqlalchemy import Connection, Engine, create_engine, inspect, make_url, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -37,6 +40,7 @@ from app.services import url_fetch
 from app.services.owners import lock_write_owner
 from app.services.rate_limit import (
     auth_requests,
+    chat_messages,
     document_retries,
     guest_creations,
     login_failures,
@@ -161,6 +165,7 @@ def _reset_app_state() -> None:
     login_failures.cache_clear()
     url_fetches.clear()
     document_retries.clear()
+    chat_messages.clear()
     storage._client.cache_clear()
 
 
@@ -243,6 +248,40 @@ def chat_model(app_env: None, monkeypatch: pytest.MonkeyPatch) -> StubChatModel:
 
     monkeypatch.setattr(providers, "get_chat_model", get_chat_model)
     return model
+
+
+FAIL_WORD = "<fail>"
+
+
+class StreamingChatModel(GenericFakeChatModel):
+    """Streams each reply word by word; grades are JSON replies, so they stream too.
+
+    A reply word FAIL_WORD raises instead, after the words before it were streamed.
+    """
+
+    def _stream(self, *args: Any, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        for chunk in super()._stream(*args, **kwargs):
+            if chunk.message.text == FAIL_WORD:
+                raise RuntimeError("provider failed mid-stream")
+            yield chunk
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> Runnable[Any, Any]:
+        return self | RunnableLambda(lambda message: Grade.model_validate_json(message.text))
+
+
+@pytest.fixture
+def streaming_replies(app_env: None, monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """Mock the chat model at the provider factory with replies given in call order."""
+
+    def set_replies(*replies: str) -> None:
+        model = StreamingChatModel(messages=iter(AIMessage(reply) for reply in replies))
+
+        def get_chat_model(settings: Settings) -> Any:
+            return model
+
+        monkeypatch.setattr(providers, "get_chat_model", get_chat_model)
+
+    return set_replies
 
 
 NOTES_MD = b"# Notes\n"

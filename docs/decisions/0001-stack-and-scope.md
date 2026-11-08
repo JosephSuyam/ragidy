@@ -7,6 +7,7 @@
 - Amended: 2026-11-04 (users: guest and registered tiers, see 0003)
 - Amended: 2026-11-05 (library split: providers exception, see [0004](0004-provider-factory.md))
 - Amended: 2026-11-05 (store: async request DB access, see [0005](0005-request-db-access.md))
+- Superseded in part by [0008](0008-chat-streaming-and-history.md) (2026-11-08): no LangGraph checkpoints
 
 ## Context
 Ragidy lets a user upload a file or link and chat with it through RAG. We need to pick the stack and keep the first scope small.
@@ -14,7 +15,7 @@ Ragidy lets a user upload a file or link and chat with it through RAG. We need t
 ## Decision
 - **API:** Python 3.12 + FastAPI + uv. The Python LlamaIndex and LangChain are more mature than their JS ports (PDF parsing, retrievers, LangGraph).
 - **Library split:** LlamaIndex for data and retrieval (`app/rag`), and LangChain/LangGraph for orchestration and memory (`app/agents`). Only plain data crosses the boundary.
-- **Store:** Postgres + pgvector, one database for vectors, documents, chat history, and LangGraph checkpoints.
+- **Store:** Postgres + pgvector, one database for vectors, documents, chat history, and LangGraph checkpoints (superseded in part by ADR 0008: no checkpoints; history is `messages` rows).
 - **Providers:** LLM and embedding providers are chosen through env vars and resolved in one factory (`app/core/providers.py`).
 - **Web:** React + TypeScript + Vite, Tailwind v4, shadcn/ui (radix, nova preset), oxlint, and Vitest.
 - **Users:** single user, no auth. `features/authentication` and `features/workspaces` exist as empty placeholders for later.

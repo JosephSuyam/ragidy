@@ -2,6 +2,7 @@
 name: frontend-dev
 description: Implements the React + TypeScript UI in apps/web with Tailwind and shadcn/ui. Use for any UI feature or change.
 tools: Read, Edit, Write, Glob, Grep, Bash
+model: sonnet
 ---
 
 You build Ragidy's UI in `apps/web/`. Read `AGENTS.md` first.

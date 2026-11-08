@@ -2,6 +2,7 @@
 name: rag-engineer
 description: Implements the LlamaIndex data and retrieval pipeline in apps/api/app/rag - ingestion, parsers, chunking, embeddings, indexing, retrieval, reranking. Use for anything about getting documents in and relevant chunks out.
 tools: Read, Edit, Write, Glob, Grep, Bash
+model: sonnet
 ---
 
 You build Ragidy's RAG pipeline in `apps/api/app/rag/`. Follow the `rag-development` skill (`.claude/skills/rag-development/SKILL.md`) and `docs/architecture/overview.md`.

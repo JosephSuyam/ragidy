@@ -2,12 +2,13 @@
 
 - Status: accepted
 - Date: 2026-11-05
+- Superseded in part by [0008](0008-chat-streaming-and-history.md) (2026-11-08): no checkpointer
 
 ## Context
-MVP step 6 adds the first routes that touch Postgres: guest creation (R1) behind a `write_owner` dependency, and `GET /me`. Request code is async (the user chose async SQLAlchemy over sync). Alembic and the migration tests already use sync psycopg 3 with `DATABASE_URL=postgresql+psycopg://...`. Later steps need SSE chat and LangGraph's `AsyncPostgresSaver`, which runs on psycopg async. psycopg async refuses Windows' default `ProactorEventLoop` ("Psycopg cannot use the 'ProactorEventLoop' to run in async mode"), and dev runs on Windows.
+MVP step 6 adds the first routes that touch Postgres: guest creation (R1) behind a `write_owner` dependency, and `GET /me`. Request code is async (the user chose async SQLAlchemy over sync). Alembic and the migration tests already use sync psycopg 3 with `DATABASE_URL=postgresql+psycopg://...`. Later steps need SSE chat and LangGraph's `AsyncPostgresSaver`, which runs on psycopg async (checkpointer superseded in part by ADR 0008). psycopg async refuses Windows' default `ProactorEventLoop` ("Psycopg cannot use the 'ProactorEventLoop' to run in async mode"), and dev runs on Windows.
 
 ## Decision
-- **Driver: psycopg 3 async**, through `create_async_engine` with the same `postgresql+psycopg://` URL. One driver and one URL serve request code, Alembic, tests and the future checkpointer. Declare the extra that SQLAlchemy async needs (greenlet, today only transitive via llama-index-core): `uv add "sqlalchemy[asyncio]>=2.1.8"`. No new package.
+- **Driver: psycopg 3 async**, through `create_async_engine` with the same `postgresql+psycopg://` URL. One driver and one URL serve request code, Alembic, tests and the future checkpointer (superseded in part by ADR 0008: no checkpointer). Declare the extra that SQLAlchemy async needs (greenlet, today only transitive via llama-index-core): `uv add "sqlalchemy[asyncio]>=2.1.8"`. No new package.
 - **Event loop.** Use `loop_factory=asyncio.SelectorEventLoop`, never the event-loop policy APIs (deprecated in Python 3.14).
   - Production (Linux, `fastapi run`): uvicorn picks uvloop, which psycopg async supports. No change.
   - Dev server: `make api` runs `fastapi dev`, which reloads in a subprocess, and uvicorn 0.54 then uses `SelectorEventLoop` on Windows. No change. Without reload (`fastapi run` on Windows), uvicorn uses Proactor, so run `uvicorn app.main:app --loop asyncio:SelectorEventLoop` instead.
@@ -18,8 +19,8 @@ MVP step 6 adds the first routes that touch Postgres: guest creation (R1) behind
 - **Alembic stays sync** (psycopg, `NullPool`), run by the one-shot compose `migrate` service. The future ingestion worker uses the same `app/core/db.py` session maker in its own process.
 
 ## Alternatives
-- **Sync SQLAlchemy in request code:** rejected by the user. It needs no loop handling, but SSE chat and the async checkpointer would then mix sync DB calls into async handlers.
-- **asyncpg:** it runs on Proactor, so Windows needs no loop change. But it adds a second driver and a `+asyncpg` URL rewrite next to sync psycopg (Alembic, tests). The checkpointer still needs psycopg async later, so the Windows loop issue returns anyway.
+- **Sync SQLAlchemy in request code:** rejected by the user. It needs no loop handling, but SSE chat and the async checkpointer (superseded in part by ADR 0008) would then mix sync DB calls into async handlers.
+- **asyncpg:** it runs on Proactor, so Windows needs no loop change. But it adds a second driver and a `+asyncpg` URL rewrite next to sync psycopg (Alembic, tests). The checkpointer still needs psycopg async later, so the Windows loop issue returns anyway (checkpointer superseded in part by ADR 0008).
 
 ## Consequences
 - SSE chat (`POST /chats/{id}/messages`) is natively async.

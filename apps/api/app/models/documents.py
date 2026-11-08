@@ -62,7 +62,7 @@ class Chunk(Base):
 
 
 class Chat(Base):
-    """A chat id is also its LangGraph thread id (ADR 0003)."""
+    """A chat's history is its `messages` rows (ADR 0008)."""
 
     __tablename__ = "chats"
     __table_args__ = (Index("ix_chats_owner_id_created_at", "owner_id", "created_at"),)
