@@ -34,7 +34,7 @@ flowchart TD
   end
   subgraph RAG["RAG Layer: LlamaIndex (app/rag)"]
     ingestion["Ingestion, embedding (app/rag/ingestion)<br/>Parsers (app/rag/parsers)<br/>Chunking (app/rag/chunking)"]
-    retrieval["Retrieval (app/rag/retrieval)<br/>Reranking (app/rag/reranking)"]
+    retrieval["Retrieval: query embedding (app/rag/retrieval)<br/>Reranking (app/rag/reranking)"]
   end
   subgraph AGENTS["Agent Layer: LangChain / LangGraph (app/agents)"]
     agentmods["Workflows (app/agents/workflows)<br/>Memory (app/agents/memory)<br/>Tools (app/agents/tools)<br/>State (app/agents/state)"]
@@ -53,10 +53,10 @@ flowchart TD
   SERVICE --> objstore
   RAG --> INFRA
   AGENTS --> INFRA
-  retrieval -.->|"RetrievedChunk (text, score, metadata)"| agentmods
+  repos -.->|"RetrievedChunk (text, score, metadata), through a retrieve callable bound in services"| agentmods
 ```
 
-Arrows connect layers, not modules, and each one means "calls"; every arrow points down, and nothing calls upward. Routes only handle requests: they never run retrieval or touch the vector store, and go through services instead. The dotted edge is the only thing that crosses between rag and agents, and it carries plain data. `app/rag` never touches object storage; workers pass it the bytes and the MIME type as plain data. Workers run as their own process and are never called by routes; the API only inserts a `pending` row.
+Arrows connect layers, not modules, and each one means "calls"; every arrow points down, and nothing calls upward. Routes only handle requests: they never run retrieval or touch the vector store, and go through services instead. Rag and agents never call each other: services embed the query through rag, search through repositories, and pass agents a `retrieve` callable. The dotted edge is the only data that reaches agents from retrieval, and it is plain data ([ADR 0007](../decisions/0007-retrieval-and-corrective-rag.md)). `app/rag` never touches object storage; workers pass it the bytes and the MIME type as plain data. Workers run as their own process and are never called by routes; the API only inserts a `pending` row.
 
 ## Ingestion
 
@@ -104,12 +104,13 @@ Status moves `pending → processing → ready | failed`. Services validate the 
 flowchart LR
   q["question"] --> agent["Agent: LangGraph (app/agents/workflows)"]
   mem[("Memory (app/agents/memory)<br/>Postgres checkpointer, one thread per chat")] -->|"memory"| agent
-  agent --> retrieve["Retrieve: LlamaIndex (app/rag/retrieval, app/rag/reranking)"]
+  agent --> retrieve["Retrieve: embed query (app/rag/retrieval)<br/>vector search (app/repositories/vector)"]
   retrieve --> grade{"grade_chunks (app/agents/workflows)"}
+  retrieve -->|"no chunks, or same chunks after a rewrite"| notfound
   grade -->|"relevant"| generate["Generate (app/agents/workflows)"]
-  grade -->|"low relevance"| rewrite["rewrite_query, max 2 (app/agents/workflows)"]
+  grade -->|"no relevant chunk"| rewrite["rewrite_query, max 2 (app/agents/workflows)"]
   rewrite --> retrieve
-  grade -->|"still low after 2 rewrites"| notfound["Answer: not found in the document (app/agents/workflows)"]
+  grade -->|"none after 2 rewrites"| notfound["Answer: not found in the document (app/agents/workflows)"]
   generate --> out["streamed answer + citations"]
 ```
 
