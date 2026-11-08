@@ -25,7 +25,7 @@ All cookies (`ragidy_session`, `ragidy_guest` and `ragidy_oauth`) are `HttpOnly;
 ### R1 Guest session
 - [x] Given no cookie, when a client makes its first write (upload, URL, new chat), then the server creates a guest, sets `ragidy_guest` with `Max-Age` of `GUEST_TTL_DAYS` days, and the write belongs to that guest.
 - [x] Given no cookie, when a client lists documents or chats, then it gets `200` with an empty list and no guest row is created.
-- [ ] Given guests A and B, when B reads, retries or deletes A's document or chat by id, then the response is `404`.
+- [x] Given guests A and B, when B reads, retries or deletes A's document or chat by id, then the response is `404`.
 - [x] No table contains the raw cookie value; `guests` holds only its hash.
 - [x] An unknown or expired guest cookie is treated as no cookie.
 - [x] A client IP key (see Security) may create `GUEST_CREATE_PER_IP_PER_HOUR` guests an hour. Over that, the write returns `429 rate_limited` with `Retry-After` and creates no guest.
@@ -97,13 +97,13 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [x] Given an owner with `MAX_DOCS_<tier>` documents in any status, when they upload or add a URL, then the response is `409 document_limit_reached`, the message states the cap, there is no row, and the object is removed.
 - [x] The cap is checked before the body is read, and again at insert. The read transaction is committed before the body is read or the URL fetched. The service writes the object first, and only then creates a guest when there is none. Then, in one transaction, it takes `SELECT ... FOR UPDATE` on the owner's `owners` row, counts documents and inserts the row, so concurrent uploads never exceed the cap.
 - [x] If the cap check or the insert fails, the service deletes the object it wrote. If the owner row is gone (the guest was purged or migrated mid-request), the upload fails the same way with `401 session_expired`; the client refreshes its session state (`GET /me`) and retries. A crash between the write and the delete leaves an orphan object, which ADR 0002 accepts as harmless.
-- [ ] Deleting a document frees a slot.
+- [x] Deleting a document frees a slot.
 
 ### R10 Guest expiry
-- [ ] A guest's `expires_at` is its creation time plus `GUEST_TTL_DAYS`. Activity does not extend it. A changed `GUEST_TTL_DAYS` applies to new guests only.
-- [ ] After `expires_at`, the cookie no longer resolves, so the data is hidden before the purge runs.
-- [ ] The worker purges expired guests at least once an hour. Each guest's purge starts with `SELECT ... FOR UPDATE` on its `owners` row and re-checks `expires_at` under that lock, so it never deletes data that just moved (R6). An upload, URL, chat-creation or message request that reaches its insert after the purge deleted the owner row returns `401 session_expired` (R9, R12). After a purge, no document row, object, vector, chat or message row of that guest remains.
-- [ ] The same purge deletes expired sessions.
+- [x] A guest's `expires_at` is its creation time plus `GUEST_TTL_DAYS`. Activity does not extend it. A changed `GUEST_TTL_DAYS` applies to new guests only.
+- [x] After `expires_at`, the cookie no longer resolves, so the data is hidden before the purge runs.
+- [x] The worker purges expired guests at least once an hour. Each guest's purge starts with `SELECT ... FOR UPDATE` on its `owners` row and re-checks `expires_at` under that lock, so it never deletes data that just moved (R6). An upload, URL, chat-creation or message request that reaches its insert after the purge deleted the owner row returns `401 session_expired` (R9, R12). After a purge, no document row, object, vector, chat or message row of that guest remains.
+- [x] The same purge deletes expired sessions.
 
 ### R11 Ingestion status and retry
 - [x] Upload and URL return `202` with the document and status `pending`. `GET /documents/{id}` shows `status`, `error` and `attempts`.
@@ -127,10 +127,10 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [x] History survives an API restart and the guest-to-user migration.
 
 ### R14 Deletion
-- [ ] `DELETE /documents/{id}` returns `204` and deletes the row, the object and the vectors. Later answers never cite it.
-- [ ] Deleting a `processing` document returns `409 document_busy`. The delete is one guarded statement, so it cannot race the worker's claim.
-- [ ] `DELETE /chats/{id}` returns `204` and deletes the chat row and its messages.
-- [ ] Deleting another owner's document or chat returns `404`.
+- [x] `DELETE /documents/{id}` returns `204` and deletes the row, the object and the vectors. Later answers never cite it.
+- [x] Deleting a `processing` document returns `409 document_busy`. The row delete is guarded by status (`processing` -> 409); the accepted race with the worker's claim is in [ADR 0009](../decisions/0009-deletion-and-purge.md).
+- [x] `DELETE /chats/{id}` returns `204` and deletes the chat row and its messages.
+- [x] Deleting another owner's document or chat returns `404`.
 
 ## API contract
 Paths are API-side and unprefixed, like `/health`. The browser reaches them under `/api` on the one origin `PUBLIC_BASE_URL` (for example `POST <PUBLIC_BASE_URL>/api/auth/login`), because the web server proxies `/api/*` to the API and strips the prefix. Errors use `{"code": "<code>", "detail": "<message>"}`. Every route below can also return `403 origin_mismatch` (state-changing methods only), `404 not_found` (unknown id or another owner's id) and `422` (validation).
@@ -169,7 +169,7 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 - [ ] Client IP: the socket peer address by default. Forwarded headers count only when the peer is in `TRUSTED_PROXIES`; empty (the default) trusts no proxy. `app/main.py` adds uvicorn's `ProxyHeadersMiddleware` with `trusted_hosts` set to the normalized `TRUSTED_PROXIES` strings (for example `10.0.0.0/8`, `192.168.1.1/32`), because the middleware takes strings (no new dependency). The API runs with `--no-proxy-headers`, because uvicorn's own handling trusts `127.0.0.1` by default, so `TRUSTED_PROXIES` is the only source of trust. A test shows that a spoofed `X-Forwarded-For` from an untrusted peer does not change the key. Behind the web container, set `TRUSTED_PROXIES` to its address, or all clients share one key.
 - [ ] Rate-limit IP key: every per-IP limit (guest creation, auth requests, login failures) keys an IPv4 client by its full address and an IPv6 client by its `/64` prefix, because one IPv6 client controls a whole `/64` and could rotate through it. An IPv4-mapped IPv6 peer (`::ffff:a.b.c.d`) is first unwrapped with `ipaddress.IPv6Address.ipv4_mapped` and keyed by that full IPv4 address. The key function never raises: ASGI allows `scope["client"]` to be `None`, so a missing peer is keyed by one shared key, `"unknown"`, and a peer host that is not a valid IP (Starlette's TestClient sends `"testclient"`) is keyed by its raw host string. The test `test_non_ip_peer_keyed_without_error` shows that both cases return a key and raise no error. The test `test_ipv6_same_64_shares_counter` shows that two requests from different addresses in the same IPv6 `/64` share one counter. The test `test_ipv4_mapped_keyed_as_ipv4` shows that a mapped peer shares a counter with the same IPv4 address, and not with other IPv4 clients.
 - [x] CSRF: cookies are `SameSite=Lax`, and middleware in `app/api/middleware` rejects every POST, PUT, PATCH and DELETE whose `Origin` header is missing or differs from the origin of `PUBLIC_BASE_URL`, with `403 origin_mismatch`. The comparison is an exact string match against the normalized `PUBLIC_BASE_URL` (Configurability).
-- [ ] Owner isolation: every repository function for documents and chats that routes or services call takes `owner_id` and puts it in the `WHERE` clause. The worker queries (claim, startup reset, status updates of status, attempts and error, object-key reads by document id, purge) are the only exemptions, named as such and called only from `app/workers`. Retrieval search (`app/repositories/vector`) takes `owner_id` and filters on it in the `WHERE` clause too, so `app/rag` and `app/agents` never see owners (ADR 0007). The assistant-message insert is the one request-path exemption: it is keyed by `chat_id` only and guarded by `WHERE EXISTS` on the chat, because a guest-to-user migration may move the chat mid-stream; the owner was checked before the stream opened (ADR 0008). A two-owner test covers read, retry, delete and chat citations.
+- [x] Owner isolation: every repository function for documents and chats that routes or services call takes `owner_id` and puts it in the `WHERE` clause. The worker queries (claim, startup reset, status updates of status, attempts and error, object-key reads by document id, purge) are the only exemptions, named as such and called only from `app/workers`. Retrieval search (`app/repositories/vector`) takes `owner_id` and filters on it in the `WHERE` clause too, so `app/rag` and `app/agents` never see owners (ADR 0007). The assistant-message insert is the one request-path exemption: it is keyed by `chat_id` only and guarded by `WHERE EXISTS` on the chat, because a guest-to-user migration may move the chat mid-stream; the owner was checked before the stream opened (ADR 0008). A two-owner test covers read, retry, delete and chat citations.
 - [ ] SSRF: URL fetching follows ADR 0002 and R8 (http(s) only, only public IPs on the connected address and every redirect hop, one deadline, size cap). Proxy env vars are ignored.
   Accepted risk: a failed fetch takes no document slot, so `URL_FETCH_PER_HOUR` is what bounds fetches.
 - [ ] At startup, a provider with a client id but no client secret, any enabled provider with an empty `AUTH_SECRET`, or a set `AUTH_SECRET` shorter than 32 characters fails with an error that names the setting.
@@ -208,15 +208,15 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 The web container's nginx accepts bodies up to `6m` on `/api/documents` only. Raising any `UPLOAD_MAX_MB_*` above 5 needs its `client_max_body_size` raised too, above the largest limit plus 16 KiB.
 
 ### Privacy
-- [ ] A guest's documents, objects, vectors, chats and messages are purged after `GUEST_TTL_DAYS` (R10), and hidden from the moment the guest expires.
-- [ ] Deleting a document removes its object and vectors, and deleting a chat removes its messages, not only the row (R14).
+- [x] A guest's documents, objects, vectors, chats and messages are purged after `GUEST_TTL_DAYS` (R10), and hidden from the moment the guest expires.
+- [x] Deleting a document removes its object and vectors, and deleting a chat removes its messages, not only the row (R14).
 - [x] Logs never contain passwords, tokens, cookie values or OAuth codes.
 
 ## Folder ownership
 - Routes: `app/api/routes`. Origin check: `app/api/middleware`. `ProxyHeadersMiddleware` setup: `app/main.py`. In-memory rate-limit counters: `app/services`.
 - Auth, session, guest and migration logic: `app/services`. Queries: `app/repositories`. Tables: `app/models`.
 - OAuth provider entries, the type-to-MIME map, the S3 client and `Settings`: `app/core`. URL validation and fetch: `app/services`.
-- Guest and session purge: `app/workers`, calling `app/rag/indexing` (vectors), `app/core` (objects) and `app/repositories` (rows).
+- Guest and session purge: `app/workers`, calling `app/core` (objects) and `app/repositories` (rows). Vectors go with their document through `chunks.document_id` `ON DELETE CASCADE` (ADR 0009).
 - Web sign-in, register and logout: `apps/web/src/features/authentication`.
 - `--no-proxy-headers` on the API run command (devops, build step): `infrastructure/docker` and `Makefile`.
 - `/api` proxy (later step): `apps/web` Vite config in dev, and the web server in `infrastructure/docker` in production (:8080).

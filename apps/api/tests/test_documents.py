@@ -1,16 +1,23 @@
+import logging
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
 import httpx
 import pytest
+from botocore.exceptions import ClientError, EndpointConnectionError
 from conftest import (
     NOTES_MD,
     Objects,
+    Sessions,
+    add_owner,
+    add_ready_document,
     after_barrier,
     app_client,
+    axis,
     concurrent_requests,
     count,
+    in_session,
     register,
     set_cookies,
     write,
@@ -22,6 +29,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import GUEST_COOKIE
 from app.core import storage
+from app.core.config import get_settings
+from app.repositories.vector.chunks import replace_chunks, search
+from app.schemas.chunks import EmbeddedChunk
 from app.services import documents
 
 pytestmark = pytest.mark.integration
@@ -29,6 +39,7 @@ pytestmark = pytest.mark.integration
 GetDb = Callable[[], AsyncIterator[AsyncSession]]
 MIB = 1024 * 1024
 PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+FACT = "The notes say hello."
 
 
 def upload(
@@ -507,3 +518,272 @@ def test_retry_from_another_origin_403(client: TestClient, db_engine: Engine) ->
     assert response.status_code == 403, response.text
     assert response.json()["code"] == "origin_mismatch"
     assert document_state(db_engine, id) == ("failed", 3, "boom")
+
+
+SECRET_URL = "https://example.com/doc.txt?token=url-secret"
+
+
+def owner_of_document(db_engine: Engine, id: str) -> uuid.UUID:
+    with db_engine.connect() as conn:
+        return conn.execute(
+            text("SELECT owner_id FROM documents WHERE id = :id"), {"id": id}
+        ).scalar_one()
+
+
+def chunks_of(db_engine: Engine, id: uuid.UUID | str) -> int:
+    with db_engine.connect() as conn:
+        return conn.execute(
+            text("SELECT count(*) FROM chunks WHERE document_id = :id"), {"id": id}
+        ).scalar_one()
+
+
+def attach_chunk(db_sessions: Sessions, id: str) -> None:
+    """One searchable chunk for the document; its status stays as the caller set it."""
+    chunk = EmbeddedChunk(FACT, axis(0), {"source": "notes.txt", "page": None})
+    in_session(db_sessions, lambda db: replace_chunks(db, uuid.UUID(id), [chunk]))
+
+
+def s3_error(kind: str) -> Exception:
+    if kind == "client":
+        return ClientError({"Error": {"Code": "InternalError", "Message": "down"}}, "DeleteObject")
+    return EndpointConnectionError(endpoint_url="http://storage.test")
+
+
+def fail_next_deletes(monkeypatch: pytest.MonkeyPatch, *errors: Exception) -> None:
+    """The next `storage.delete_object` calls raise `errors` in order, then delete as usual."""
+    delete = storage.delete_object
+    pending = list(errors)
+
+    async def flaky(key: str) -> None:
+        if pending:
+            raise pending.pop(0)
+        await delete(key)
+
+    monkeypatch.setattr(storage, "delete_object", flaky)
+
+
+@pytest.mark.parametrize("status", ["pending", "failed", "ready"])
+def test_delete_removes_row_chunks_and_object_then_404(
+    client: TestClient,
+    db_engine: Engine,
+    db_sessions: Sessions,
+    fake_storage: Objects,
+    deleted_keys: list[str],
+    status: str,
+) -> None:
+    id, _ = new_guest_document(client)
+    attach_chunk(db_sessions, id)
+    set_status(db_engine, id, status)
+
+    response = client.delete(f"/documents/{id}")
+
+    assert response.status_code == 204, response.text
+    assert response.content == b""
+    assert (count(db_engine, "documents"), count(db_engine, "chunks")) == (0, 0)
+    assert deleted_keys == [f"documents/{id}"]
+    assert fake_storage == {}
+    again = client.delete(f"/documents/{id}")
+    assert again.status_code == 404, again.text
+    assert again.json()["code"] == "not_found"
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_delete_removes_the_document_from_search(
+    client: TestClient, db_engine: Engine, db_sessions: Sessions
+) -> None:
+    id, _ = new_guest_document(client)
+    set_status(db_engine, id, "ready")
+    attach_chunk(db_sessions, id)
+    owner = owner_of_document(db_engine, id)
+
+    def hits() -> int:
+        found = in_session(
+            db_sessions,
+            lambda db: search(db, owner, get_settings().embed_model, axis(0), 5),
+        )
+        return len(found)
+
+    assert hits() == 1
+    assert client.delete(f"/documents/{id}").status_code == 204
+    assert hits() == 0
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_delete_while_processing_409_and_no_object_delete(
+    client: TestClient, db_engine: Engine, fake_storage: Objects, deleted_keys: list[str]
+) -> None:
+    id, _ = new_guest_document(client)
+    set_status(db_engine, id, "processing")
+
+    response = client.delete(f"/documents/{id}")
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "document_busy"
+    assert deleted_keys == []
+    assert f"documents/{id}" in fake_storage
+    assert document_state(db_engine, id) == ("processing", 3, "boom")
+
+
+def test_delete_another_owners_document_404_and_keeps_it(
+    client: TestClient,
+    db_engine: Engine,
+    db_sessions: Sessions,
+    fake_storage: Objects,
+    deleted_keys: list[str],
+) -> None:
+    new_guest_document(client)  # the client's own guest
+    theirs = add_ready_document(db_engine, db_sessions, add_owner(db_engine), {FACT: axis(0)})
+    key = f"documents/{theirs}"
+    fake_storage[key] = (b"theirs", "text/plain")
+
+    response = client.delete(f"/documents/{theirs}")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["code"] == "not_found"
+    assert deleted_keys == []
+    assert fake_storage[key] == (b"theirs", "text/plain")
+    assert (count(db_engine, "documents"), chunks_of(db_engine, theirs)) == (2, 1)
+
+
+def test_delete_without_a_cookie_404_and_creates_no_guest(
+    client: TestClient,
+    db_engine: Engine,
+    db_sessions: Sessions,
+    fake_storage: Objects,
+    deleted_keys: list[str],
+) -> None:
+    theirs = add_ready_document(db_engine, db_sessions, add_owner(db_engine), {FACT: axis(0)})
+
+    response = client.delete(f"/documents/{theirs}")
+
+    assert response.status_code == 404, response.text
+    assert "set-cookie" not in response.headers
+    assert deleted_keys == []
+    assert (count(db_engine, "guests"), count(db_engine, "documents")) == (0, 1)
+
+
+@pytest.mark.parametrize("kind", ["client", "connection"])
+def test_delete_storage_failure_503_keeps_the_row_then_retry_succeeds(
+    client: TestClient,
+    db_engine: Engine,
+    fake_storage: Objects,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    id, _ = new_guest_document(client)
+    fail_next_deletes(monkeypatch, s3_error(kind))
+
+    response = client.delete(f"/documents/{id}")
+
+    assert response.status_code == 503, response.text
+    assert response.json() == {
+        "code": "storage_unavailable",
+        "detail": "Storage is unavailable; try again later",
+    }
+    assert document_state(db_engine, id) == ("pending", 0, None)
+    assert f"documents/{id}" in fake_storage
+
+    retry = client.delete(f"/documents/{id}")
+
+    assert retry.status_code == 204, retry.text
+    assert count(db_engine, "documents") == 0
+    assert fake_storage == {}
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_delete_logs_ids_and_error_types_never_the_source(
+    client: TestClient,
+    db_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    id, _ = new_guest_document(client)
+    with db_engine.begin() as conn:
+        conn.execute(
+            text("UPDATE documents SET source = :s WHERE id = :id"), {"s": SECRET_URL, "id": id}
+        )
+    fail_next_deletes(monkeypatch, s3_error("client"))
+    caplog.set_level(logging.DEBUG)
+
+    assert client.delete(f"/documents/{id}").status_code == 503
+    assert client.delete(f"/documents/{id}").status_code == 204
+
+    assert f"Object delete failed for document {id}: ClientError" in caplog.text
+    assert "url-secret" not in caplog.text
+    assert "doc.txt" not in caplog.text
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_deleting_a_document_frees_a_slot_under_the_cap(
+    db_override: GetDb, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MAX_DOCS_GUEST", "1")
+    with app_client(db_override) as client:
+        first = upload(client, b"first").json()["id"]
+        full = upload(client, b"second")
+        assert full.status_code == 409, full.text
+        assert full.json()["code"] == "document_limit_reached"
+        assert client.delete(f"/documents/{first}").status_code == 204
+        assert upload(client, b"second").status_code == 202
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_delete_from_another_origin_403_and_keeps_the_document(
+    client: TestClient, db_engine: Engine
+) -> None:
+    id, _ = new_guest_document(client)
+
+    response = client.delete(f"/documents/{id}", headers={"Origin": "https://evil.example"})
+
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "origin_mismatch"
+    assert document_state(db_engine, id) == ("pending", 0, None)
+
+
+def test_delete_race_with_the_worker_claim_409_and_row_stays(
+    client: TestClient,
+    db_engine: Engine,
+    fake_storage: Objects,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    id, _ = new_guest_document(client)
+    delete = storage.delete_object
+
+    async def claimed_after_the_object_delete(key: str) -> None:
+        await delete(key)
+        # The worker claims the pending document between the S3 delete and the row delete.
+        set_status(db_engine, id, "processing")
+
+    monkeypatch.setattr(storage, "delete_object", claimed_after_the_object_delete)
+
+    response = client.delete(f"/documents/{id}")
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "document_busy"
+    assert fake_storage == {}
+    assert document_state(db_engine, id) == ("processing", 3, "boom")
+
+
+def test_delete_race_with_a_concurrent_delete_404(
+    client: TestClient,
+    db_engine: Engine,
+    fake_storage: Objects,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    id, _ = new_guest_document(client)
+    delete = storage.delete_object
+
+    async def deleted_after_the_object_delete(key: str) -> None:
+        await delete(key)
+        # Another request deletes the row between the S3 delete and the row delete.
+        with db_engine.begin() as conn:
+            conn.execute(text("DELETE FROM documents WHERE id = :id"), {"id": id})
+
+    monkeypatch.setattr(storage, "delete_object", deleted_after_the_object_delete)
+
+    response = client.delete(f"/documents/{id}")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["code"] == "not_found"
+    assert fake_storage == {}
+    assert count(db_engine, "documents") == 0

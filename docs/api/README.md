@@ -17,10 +17,12 @@ Base URL in development: `http://localhost:8000`. The browser reaches the same p
 | GET | `/documents` | `200 [{id, source, status, error, attempts, created_at}]` | The owner's documents, newest first. `[]` with no cookie, or an unknown or expired one; never creates a guest |
 | GET | `/documents/{id}` | `200 {id, source, status, error, attempts, created_at}` | One of the owner's documents, for polling `status` and `error`. Errors: `404 not_found`, `422` |
 | POST | `/documents/{id}/retry` | `202 {id, source, status, error, attempts, created_at}` | Queues a `failed` or `ready` document again: `status` `pending`, `attempts` `0`, `error` `null`. Errors: `403 origin_mismatch`, `404 not_found`, `409 document_busy`, `422`, `429 rate_limited`. See [Documents](#documents) |
+| DELETE | `/documents/{id}` | `204`, no body | Deletes the owner's document: its object, row and chunks. Errors: `403 origin_mismatch`, `404 not_found` (unknown, another owner's, no cookie, already deleted), `409 document_busy` while `processing`, also when the worker claims it mid-delete, `422`, `503 storage_unavailable` (the row is kept, so a retry is safe). Never creates a guest. See [Documents](#documents) |
 | POST | `/chats` | `201 {id, title, created_at}` | Body `{title?}`, at most 200 characters, or no body (`title` `null`). Creates a guest and sets `ragidy_guest` when the request has no owner. Errors: `401 session_expired`, `422`, `429 rate_limited` |
 | GET | `/chats` | `200 [{id, title, created_at}]` | The owner's chats, newest first. `[]` with no cookie, or an unknown or expired one; never creates a guest |
 | GET | `/chats/{id}/messages` | `200 [{role, content, citations}]` | The chat's messages, oldest first. `role` is `user` or `assistant`; `citations` as the `citations` event, `[]` on user messages. Errors: `404 not_found`, `422` |
 | POST | `/chats/{id}/messages` | `200 text/event-stream` | Body `{content}`: 1 to 4000 characters after stripping whitespace. Stores the question, then streams the answer. Errors, before the stream: `401 session_expired`, `404 not_found`, `422`, `429 rate_limited`. See [Chats](#chats) |
+| DELETE | `/chats/{id}` | `204` | Deletes the owner's chat and its messages. Errors: `403 origin_mismatch`, `404 not_found` (unknown, another owner's, no cookie, already deleted), `422`. Never creates a guest. Citations of a deleted document stay in other chats' history, so a `document_id` may no longer exist |
 
 Add each new endpoint here: method, path, request, response, and error codes.
 
@@ -44,6 +46,7 @@ Add each new endpoint here: method, path, request, response, and error codes.
   - URL fetches: `URL_FETCH_PER_HOUR` per owner, or per client IP key when the request has no owner yet. Every attempt counts, before the fetch, failed ones included.
   - Document retries: `DOCUMENT_RETRY_PER_HOUR` per owner. Every attempt by an owner counts, before the status check, so a `404` or `409` takes a slot too.
   - Chat messages: `CHAT_MESSAGES_PER_HOUR_<tier>` per owner. The count is taken after the chat lookup, so a `404` takes no slot, and before any LLM call.
+- `503 storage_unavailable`: the object store failed during `DELETE /documents/{id}`. Detail: `Storage is unavailable; try again later`. The document is intact; retry.
 - All rate-limit counters are in memory, so they hold only for a single API process.
 - Request validation errors return `422 {"detail": [{"type": "<type>", "loc": [...], "msg": "<message>"}]}`. The body never includes the submitted value (no `input`, `ctx` or `url`), so a rejected password is not echoed back. A NUL character (`\u0000`) in any free-text field gets `422`: auth `email` and `password`, `POST /documents/url` `url`, chat `title` and message `content`. A `POST /documents` without a `file` part gets that body too.
 - A malformed multipart body, or one with more than one file or any other part, gets Starlette's `400 {"detail": "<message>"}`, without a `code`.
@@ -78,6 +81,7 @@ Add each new endpoint here: method, path, request, response, and error codes.
 - Storage: the bucket `S3_BUCKET` is created, private, on the first upload that finds it missing. That create sends no `LocationConstraint`, so on AWS outside `us-east-1` create the bucket first.
 - Ingestion: the worker (`make worker`) moves `status` from `pending` through `processing` to `ready` or `failed`. On `failed`, `error` holds a short user-safe message, never the raw exception. Poll `GET /documents/{id}` for the outcome. Retry rules: [overview](../architecture/overview.md#runtime-self-healing-rules).
 - Behind the web container (`make up`), nginx accepts bodies up to `6m` on `/api/documents` only; every other route keeps nginx's `1m` default. Raising any `UPLOAD_MAX_MB_*` above 5 needs `client_max_body_size` in `infrastructure/docker/nginx.conf` raised too, above the largest limit plus 16 KiB.
+- Delete: the object is removed first, then the row and its chunks. A `503` leaves everything in place. Deleting is permanent. Citations that name the document stay in chat history ([ADR 0009](../decisions/0009-deletion-and-purge.md)).
 - Accepted risks:
   - A failed URL fetch takes no document slot; `URL_FETCH_PER_HOUR` bounds how often an owner can make the server fetch.
 

@@ -5,6 +5,7 @@ Run one instance with `python -m app.workers.ingestion`; a Postgres advisory loc
 
 import asyncio
 import logging
+import time
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -19,6 +20,7 @@ from app.rag.errors import IngestionError
 from app.rag.ingestion import ingest_document
 from app.repositories import document_jobs
 from app.repositories.vector.chunks import replace_chunks
+from app.workers.purge import PURGE_BATCH, PURGE_INTERVAL_SECONDS, purge_expired
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +109,18 @@ async def _run_locked() -> None:
             count = await document_jobs.reset_interrupted(db)
             await db.commit()
         logger.info("Reset %d interrupted documents", count)
+        purge_due_at = time.monotonic()
         while True:
             # A dropped lock connection frees the lock, so never claim a job without it.
             await lock_conn.scalar(select(1))
             await lock_conn.commit()
+            if time.monotonic() >= purge_due_at:
+                purge_due_at = time.monotonic() + PURGE_INTERVAL_SECONDS
+                try:
+                    if await purge_expired() == PURGE_BATCH:
+                        purge_due_at = time.monotonic()
+                except Exception as exc:
+                    logger.warning("Guest purge failed (%s)", type(exc).__name__)
             try:
                 busy = await run_once()
             except Exception:
