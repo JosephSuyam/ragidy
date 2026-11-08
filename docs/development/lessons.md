@@ -23,11 +23,13 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - Before debugging an integration test that fails with `password authentication failed for user "ragidy"`, run `netstat -ano | rg :5432`, because a native Windows Postgres service on :5432 shadows the Docker `ragidy-db-1` port. (tests, 2026-11-05)
 - Build signed or time-limited test values (cookies, tokens) inside the test body, never in `pytest.mark.parametrize` arguments, because parametrize runs at collection and the values can expire before the case runs (an `exp=now+600` OAuth cookie). (tests, 2026-11-06)
 - Run `docker ps` before integration tests and start `make db` if `ragidy-db-1` is not up, because with Postgres down they hang for more than 180 s with no output instead of failing. (tests, 2026-11-06)
+- Guard tests against the app database with a `pytest.fail` (a `BaseException`) when the engine is built, never rely on an unreachable `DATABASE_URL` alone, because a psycopg connect to a refused port on Windows hung for over 120 s instead of failing, and the worker loop's `except Exception` would swallow an ordinary error. (tests, 2026-11-08)
 
 ## Docs
 - Write diagram labels as the step name first, then its folder in parentheses (`Services (app/services)`), and name folders only, never files that do not exist yet, because mixed label formats and phantom paths mislead readers. (docs, 2026-11-04)
 
 ## Tooling and CI
+- Add an import in the same edit as its first use, because the post-edit hook strips imports it sees as unused, so a split edit leaves an undefined name (F821) that fails the stop hook. (workflow, 2026-11-08)
 - Use `python infrastructure/scripts/check.py`, never ad-hoc lint/test commands, because hooks and CI run exactly that gate. (workflow, 2026-11-03)
 - Do bulk path renames in one regex pass, never as chained `str.replace` calls, because later pairs re-match earlier output (`scripts/check.py` → `infrastructure/infrastructure/...`). (tooling, 2026-11-03)
 - Quote YAML frontmatter values that contain `: `, because unquoted ones silently fail to parse (command descriptions fell back to body text). (workflow, 2026-11-03)

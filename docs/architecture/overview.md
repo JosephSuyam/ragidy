@@ -67,6 +67,7 @@ Every piece of app code must follow these rules.
 4. **Grounded answers only.** Every answer cites the chunks it used. When retrieval returns nothing, say so; never answer from model memory.
 5. **Ingestion status.** Each document moves through `pending → processing → ready | failed` and stores an `error` field.
    - One worker process runs the jobs: `make worker` (`python -m app.workers.ingestion`), or the compose `worker` service. It takes a Postgres advisory lock at startup and exits if another worker holds it. When the database drops, it reconnects and takes the lock again before it claims another job ([ADR 0006](../decisions/0006-vector-store.md)).
+   - The same worker also purges expired guests and sessions at startup and then every 15 minutes, deleting each guest's objects, documents, chats and owner row in one transaction ([ADR 0009](../decisions/0009-deletion-and-purge.md)).
    - Provider, object storage and timeout errors get 3 attempts in total, with a backoff of 30 s, then 2 min. After a failure, the row goes back to `pending` while `attempts < 3`, and becomes `failed` with its error after that.
    - An `IngestionError` (unusable input, such as an unreadable or password-protected file, or no readable text) sets `failed` at once, with no retry.
    - Each job runs under a 600 s timeout, which counts as a failed attempt.
