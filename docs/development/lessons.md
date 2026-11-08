@@ -10,7 +10,8 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - Never log, `repr` or serialize (`to_dict`, `to_json`) a LlamaIndex `OpenAIEmbedding`, because it stores `api_key` as a plain str, not `SecretStr`. (api, 2026-11-05)
 - Commit the read transaction before slow non-DB work in a request (argon2 hashing, LLM calls), or do that work before the first DB query, because the pooled connection otherwise idles in a transaction meanwhile and about 15 concurrent logins exhausted the pool. (api, 2026-11-08)
 - Reject a DOCX DOCTYPE only after requiring strict UTF-8 with no NUL bytes, because expat auto-detects UTF-16 even with `XMLParser(encoding="utf-8")`, so a UTF-16 `<!DOCTYPE` slips past a byte check and its entities expand. (api, 2026-11-08)
-- Strip `\x00` from parsed text before storing it, because pypdf `extract_text()` emits NUL for some fonts and Postgres `text` rejects it after the embeddings were already paid. (api, 2026-11-08)
+- Strip `\x00` from parsed text before storing it, and reject it with `422` in every free-text request schema, because Postgres `text` refuses NUL: pypdf `extract_text()` emits it for some fonts (rejected after the embeddings were paid), and a request that reaches the INSERT fails with a 500. (api, 2026-11-08)
+- Set `hide_parameters=True` on the SQLAlchemy engine, because an escaping DB error otherwise logs its bound values (user questions, answers) through uvicorn's traceback. (api, 2026-11-08)
 - Set `num_workers` on LlamaIndex embed models, because without it `aget_text_embedding_batch` sends every batch at once with `asyncio.gather` (about 25 OpenAI or 250 Ollama parallel requests for a 5 MB file). (api, 2026-11-08)
 
 ## Web

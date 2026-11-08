@@ -17,6 +17,10 @@ Base URL in development: `http://localhost:8000`. The browser reaches the same p
 | GET | `/documents` | `200 [{id, source, status, error, attempts, created_at}]` | The owner's documents, newest first. `[]` with no cookie, or an unknown or expired one; never creates a guest |
 | GET | `/documents/{id}` | `200 {id, source, status, error, attempts, created_at}` | One of the owner's documents, for polling `status` and `error`. Errors: `404 not_found`, `422` |
 | POST | `/documents/{id}/retry` | `202 {id, source, status, error, attempts, created_at}` | Queues a `failed` or `ready` document again: `status` `pending`, `attempts` `0`, `error` `null`. Errors: `403 origin_mismatch`, `404 not_found`, `409 document_busy`, `422`, `429 rate_limited`. See [Documents](#documents) |
+| POST | `/chats` | `201 {id, title, created_at}` | Body `{title?}`, at most 200 characters, or no body (`title` `null`). Creates a guest and sets `ragidy_guest` when the request has no owner. Errors: `401 session_expired`, `422`, `429 rate_limited` |
+| GET | `/chats` | `200 [{id, title, created_at}]` | The owner's chats, newest first. `[]` with no cookie, or an unknown or expired one; never creates a guest |
+| GET | `/chats/{id}/messages` | `200 [{role, content, citations}]` | The chat's messages, oldest first. `role` is `user` or `assistant`; `citations` as the `citations` event, `[]` on user messages. Errors: `404 not_found`, `422` |
+| POST | `/chats/{id}/messages` | `200 text/event-stream` | Body `{content}`: 1 to 4000 characters after stripping whitespace. Stores the question, then streams the answer. Errors, before the stream: `401 session_expired`, `404 not_found`, `422`, `429 rate_limited`. See [Chats](#chats) |
 
 Add each new endpoint here: method, path, request, response, and error codes.
 
@@ -25,7 +29,7 @@ Add each new endpoint here: method, path, request, response, and error codes.
 - `401 invalid_credentials`: a wrong password, an unknown or malformed email, and an account without a password all get this same response.
 - `401 session_expired`: the owner row was deleted (a guest purge or migration) while the request ran. Refresh with `GET /me` and retry.
 - `403 origin_mismatch`: every request except GET, HEAD and OPTIONS needs an `Origin` header exactly equal to `PUBLIC_BASE_URL` (CSRF guard). Scripts must send it, for example `curl -H "Origin: http://localhost:5173"`.
-- `404 not_found`: the document does not exist, belongs to another owner, or the request has no owner.
+- `404 not_found`: the document or chat does not exist, belongs to another owner, or the request has no owner.
 - `409 document_busy`: the document is `pending` or `processing`, so a retry would race the worker.
 - `409 email_taken`: the email already has an account, including an OAuth-only one.
 - `409 document_limit_reached`: the owner already has `MAX_DOCS_<tier>` documents. The detail states the cap.
@@ -39,8 +43,9 @@ Add each new endpoint here: method, path, request, response, and error codes.
   - Login lockout: `LOGIN_MAX_FAILURES` attempts per email and client IP key in `LOGIN_FAILURE_WINDOW_MINUTES`. Each attempt counts until one succeeds, which clears that email and IP's count. Once locked, even the right password gets `429`.
   - URL fetches: `URL_FETCH_PER_HOUR` per owner, or per client IP key when the request has no owner yet. Every attempt counts, before the fetch, failed ones included.
   - Document retries: `DOCUMENT_RETRY_PER_HOUR` per owner. Every attempt by an owner counts, before the status check, so a `404` or `409` takes a slot too.
+  - Chat messages: `CHAT_MESSAGES_PER_HOUR_<tier>` per owner. The count is taken after the chat lookup, so a `404` takes no slot, and before any LLM call.
 - All rate-limit counters are in memory, so they hold only for a single API process.
-- Request validation errors keep FastAPI's default `422` body. A `POST /documents` without a `file` part gets that body too.
+- Request validation errors keep FastAPI's default `422` body. Free-text fields (`title`, `content`) containing a NUL character (`\u0000`) get `422`. A `POST /documents` without a `file` part gets that body too.
 - A malformed multipart body, or one with more than one file or any other part, gets Starlette's `400 {"detail": "<message>"}`, without a `code`.
 
 ## Guest cookie
@@ -75,3 +80,15 @@ Add each new endpoint here: method, path, request, response, and error codes.
 - Behind the web container (`make up`), nginx accepts bodies up to `6m` on `/api/documents` only; every other route keeps nginx's `1m` default. Raising any `UPLOAD_MAX_MB_*` above 5 needs `client_max_body_size` in `infrastructure/docker/nginx.conf` raised too, above the largest limit plus 16 KiB.
 - Accepted risks:
   - A failed URL fetch takes no document slot; `URL_FETCH_PER_HOUR` bounds how often an owner can make the server fetch.
+
+## Chats
+- `POST /chats/{id}/messages` checks, in order: the chat lookup (`404`), the hourly limit (`429`), the owner row (`401`). It then stores and commits the question before any LLM call. Any of these errors returns JSON, not a stream, and stores no message.
+- Each question is answered on its own; earlier messages are not sent to the model ([ADR 0008](../decisions/0008-chat-streaming-and-history.md)).
+- Stream events, in order:
+  - `token` `{"text": "<chunk>"}`, repeated. A not-found answer, or a model that does not stream, sends one `token` with the full answer.
+  - `citations` `[{document_id, source, page, snippet}]`, once. `page` is `null` when the source has no pages. `[]` when the answer is not found.
+  - `done` `{}`, last.
+- `error` `{"code": "answer_failed", "detail": "The answer could not be generated; try again later"}` replaces `citations` and `done` when the provider fails or a database error stops the answer from being stored. It may follow `token` events. No assistant message is stored, and the question stays unanswered in the history.
+- While the stream is idle, the server sends a `: ping` comment every 15 s to keep it open. `EventSource` clients ignore it.
+- The assistant message is stored after the last `token` and before `citations`. If the chat was deleted meanwhile, the stream still ends with `citations` and `done`, and the answer is not stored.
+- A client disconnect cancels the answer and stores no assistant message.
