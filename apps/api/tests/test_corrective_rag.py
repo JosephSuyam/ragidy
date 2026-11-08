@@ -1,9 +1,11 @@
 import asyncio
+from collections.abc import Callable
 from uuid import UUID, uuid4
 
 import pytest
 from conftest import StubChatModel
 
+from app.agents.state import Answer
 from app.agents.workflows import (
     GRADE_PROMPT,
     MAX_QUERY_CHARS,
@@ -11,6 +13,7 @@ from app.agents.workflows import (
     REWRITE_PROMPT,
     SNIPPET_CHARS,
     answer,
+    stream_answer,
 )
 from app.schemas.chunks import RetrievedChunk
 
@@ -167,3 +170,53 @@ def test_out_of_range_grade_index_is_ignored(chat_model: StubChatModel, bad_inde
     assert result["citations"] == [
         {"document_id": doc, "source": "a.pdf", "page": None, "snippet": "Ragidy is a RAG app."}
     ]
+
+
+def _stream(retrieve: FakeRetrieve) -> tuple[list[str], Answer]:
+    async def collect() -> list[str | Answer]:
+        return [item async for item in stream_answer(QUESTION, retrieve)]
+
+    *tokens, final = asyncio.run(collect())
+    assert all(isinstance(token, str) for token in tokens)
+    assert isinstance(final, dict)
+    return [str(token) for token in tokens], final
+
+
+def test_stream_emits_only_generate_tokens(streaming_replies: Callable[..., None]) -> None:
+    doc = uuid4()
+    streaming_replies('{"relevant": [0]}', "Ragidy is a RAG app.")
+
+    tokens, final = _stream(FakeRetrieve([_chunk("Ragidy is a RAG app.", doc, 1)]))
+
+    assert len(tokens) > 1
+    assert "".join(tokens) == final["answer"] == "Ragidy is a RAG app."
+    assert final["citations"] == [
+        {"document_id": doc, "source": "a.pdf", "page": 1, "snippet": "Ragidy is a RAG app."}
+    ]
+
+
+def test_stream_not_found_yields_only_the_final_answer(
+    streaming_replies: Callable[..., None],
+) -> None:
+    streaming_replies()
+
+    tokens, final = _stream(FakeRetrieve([]))
+
+    assert tokens == []
+    assert final == {"answer": NOT_FOUND_ANSWER, "citations": []}
+
+
+def test_stream_never_yields_rewrite_or_grade_tokens(
+    streaming_replies: Callable[..., None],
+) -> None:
+    streaming_replies(
+        '{"relevant": []}', "rewritten query", '{"relevant": [0]}', "Ragidy is a RAG app."
+    )
+    retrieve = FakeRetrieve(
+        [_chunk("Off topic.", uuid4(), 1)], [_chunk("Ragidy is a RAG app.", uuid4(), 2)]
+    )
+
+    tokens, final = _stream(retrieve)
+
+    assert retrieve.queries == [QUESTION, "rewritten query"]
+    assert "".join(tokens) == final["answer"] == "Ragidy is a RAG app."
