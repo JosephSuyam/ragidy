@@ -14,7 +14,7 @@ flowchart LR
   worker -->|"bytes, MIME type"| ingest["Ingestion: LlamaIndex<br/>Parse (app/rag/parsers)<br/>Chunk (app/rag/chunking)<br/>Embed (app/rag/ingestion)"]
   ingest -->|"EmbeddedChunk list"| worker
   worker -->|"replace chunks (app/repositories/vector)"| pg[("pgvector: chunks table")]
-  q["question"] --> agent["Agent: LangGraph (app/agents/workflows)<br/>Memory (app/agents/memory)"] --> retrieve["Retrieve: embed query (app/rag/retrieval)<br/>vector search (app/repositories/vector)"] --> grade{"grade_chunks (app/agents/workflows)"} --> generate["Generate (app/agents/workflows)"] --> out["streamed answer + citations"]
+  q["question"] --> agent["Agent: LangGraph (app/agents/workflows)"] --> retrieve["Retrieve: embed query (app/rag/retrieval)<br/>vector search (app/repositories/vector)"] --> grade{"grade_chunks (app/agents/workflows)"} --> generate["Generate (app/agents/workflows)"] --> out["streamed answer + citations"]
   grade -->|"rewrite_query (app/agents/workflows)"| retrieve
 ```
 
@@ -30,13 +30,15 @@ More diagrams: [diagrams.md](diagrams.md).
 | Index | `chunks` table, pgvector `Vector` column via SQLAlchemy ([ADR 0006](../decisions/0006-vector-store.md)) | `app/repositories/vector` |
 | Retrieve | Query embedding from `app/core/providers.py`, then a cosine search over the owner's `ready` chunks of the current `embed_model`; no reranker yet ([ADR 0007](../decisions/0007-retrieval-and-corrective-rag.md)) | `app/rag/retrieval`, `app/repositories/vector` |
 | Workflow: grade, rewrite, generate | LangGraph + LangChain chat models | `app/agents/workflows` |
-| Memory | LangGraph Postgres checkpointer | `app/agents/memory` |
+| History | `messages` rows; the graph stays stateless and each question is answered on its own ([ADR 0008](../decisions/0008-chat-streaming-and-history.md)) | `app/repositories` |
 | Tools, state | LangChain tools, typed state | `app/agents/tools`, `app/agents/state` |
 | Model selection | Provider factory reading `Settings` | `app/core/providers.py` |
 
 **Boundary:** `app/rag/retrieval` embeds the query, and `app/repositories/vector` searches and returns `list[RetrievedChunk]`, where each item holds `text`, `score` and `metadata` (document_id, source, page). `app/services` binds both into a `retrieve(question)` callable and passes it to the graph's `retrieve` node, so `app/agents` never sees the DB, owners or LlamaIndex. LlamaIndex objects never leave `app/rag/` ([ADR 0007](../decisions/0007-retrieval-and-corrective-rag.md)).
 
-**Auth:** routes resolve the session or guest cookie to one `owner_id` through `app/services`, and pass it down. Every document and chat query in `app/repositories` that routes or services call filters on `owner_id`; only the worker queries (claim, startup reset, status updates, object-key reads, purge) are exempt, and only `app/workers` calls them. Retrieval search filters on `owner_id` in `app/repositories/vector`, so `app/rag` and `app/agents` never see users, guests or cookies. `app/api/middleware` rejects state-changing requests whose `Origin` is not the origin of `PUBLIC_BASE_URL`. The browser uses one origin, `PUBLIC_BASE_URL`: the web server (Vite in dev, the web container in production) proxies `/api/*` to the API and strips the prefix, so cookies are first-party and no CORS is needed. OAuth provider entries live in `app/core`, which is the only place that holds their client config.
+**Chat:** a route dependency runs every check before the SSE stream opens (chat lookup, rate limit, owner-row lock, user-message insert, commit), so they can still return 404, 429 or 401. The stream sends `token` events from the `generate` node, stores the assistant message after the last token, then sends `citations` and `done`, or one `error` event on a provider failure. No transaction spans an LLM call ([ADR 0008](../decisions/0008-chat-streaming-and-history.md)).
+
+**Auth:** routes resolve the session or guest cookie to one `owner_id` through `app/services`, and pass it down. Every document and chat query in `app/repositories` that routes or services call filters on `owner_id`; only the worker queries (claim, startup reset, status updates, object-key reads, purge) are exempt, and only `app/workers` calls them. The one request-path exemption is the assistant-message insert, keyed by `chat_id` and guarded by `WHERE EXISTS` on the chat, because a guest-to-user migration may move the chat mid-stream ([ADR 0008](../decisions/0008-chat-streaming-and-history.md)). Retrieval search filters on `owner_id` in `app/repositories/vector`, so `app/rag` and `app/agents` never see users, guests or cookies. `app/api/middleware` rejects state-changing requests whose `Origin` is not the origin of `PUBLIC_BASE_URL`. The browser uses one origin, `PUBLIC_BASE_URL`: the web server (Vite in dev, the web container in production) proxies `/api/*` to the API and strips the prefix, so cookies are first-party and no CORS is needed. OAuth provider entries live in `app/core`, which is the only place that holds their client config.
 
 **Layering:** `api/routes` → `services`; `services` and `workers` (own process) → (`rag` | `agents` | `repositories` | `core`) → `models`. Routes never call `workers`. Nothing calls upward.
 
@@ -86,7 +88,6 @@ Tables, columns and keys: [Database schema](diagrams.md#database-schema).
   - The object key is not stored: it is `documents/<id>`, derived from the row's `id`, which the service generates before the object write. It never comes from the filename, URL or any user input; the original filename or URL is kept only in `source`.
 - Object storage (SeaweedFS, or any S3-compatible store): one object per document at `documents/<id>`, the raw upload or fetched URL content, with the server-detected MIME type as its `Content-Type`
 - `chunks`: id, document_id (deleted with its document), position (unique per document), text, metadata (JSON), embedding (`vector` with no dimension, so retrieval filters on `documents.embed_model`). Created in Alembic; owner isolation comes from the join to `documents` ([ADR 0006](../decisions/0006-vector-store.md)).
-- `chats`: id (also the LangGraph thread id), owner_id, title, created_at
+- `chats`: id, owner_id, title, created_at
 - `messages`: id, chat_id (deleted with its chat), role (`user` or `assistant`), content, citations (JSON, default `[]`), created_at. This is the chat history the API returns.
-- LangGraph checkpointer tables: one thread per chat
 - Accounts ([ADR 0003](../decisions/0003-guest-and-user-accounts.md)): `owners` (one row per guest or user), `users`, `oauth_accounts`, `sessions` (token hash, expiry), `guests` (token hash, expiry)
