@@ -73,6 +73,7 @@ guest_creations = SlidingWindow(3600)
 auth_requests = SlidingWindow(60)
 url_fetches = SlidingWindow(3600)
 document_retries = SlidingWindow(3600)
+chat_messages = SlidingWindow(3600)
 
 
 @lru_cache
