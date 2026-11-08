@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,7 +17,7 @@ class DocumentOut(BaseModel):
 
     id: UUID
     source: str
-    status: str
+    status: Literal["pending", "processing", "ready", "failed"]
     error: str | None
     attempts: int
     created_at: datetime
