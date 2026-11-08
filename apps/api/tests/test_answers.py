@@ -1,7 +1,15 @@
 from uuid import UUID
 
 import pytest
-from conftest import Sessions, StubChatModel, add_owner, add_ready_document, axis, in_session
+from conftest import (
+    Sessions,
+    StubChatModel,
+    add_owner,
+    add_ready_document,
+    axis,
+    final_answer,
+    in_session,
+)
 from llama_index.core import MockEmbedding
 from sqlalchemy import Engine, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +18,7 @@ from app.agents.state import Answer
 from app.agents.workflows import NOT_FOUND_ANSWER
 from app.core.config import get_settings
 from app.services import answers
-from app.services.answers import TOP_K, answer_question
+from app.services.answers import TOP_K, stream_answer_question
 
 pytestmark = [pytest.mark.integration, pytest.mark.usefixtures("mock_embeddings")]
 
@@ -19,7 +27,9 @@ KEEP_ALL = list(range(TOP_K))
 
 
 def ask(db_sessions: Sessions, owner_id: UUID) -> Answer:
-    return in_session(db_sessions, lambda db: answer_question(db, owner_id, QUESTION))
+    return in_session(
+        db_sessions, lambda db: final_answer(stream_answer_question(db, owner_id, QUESTION))
+    )
 
 
 def add_doc(
@@ -121,7 +131,7 @@ def test_no_transaction_is_open_during_embedding_or_chat_calls(
         # Mimics the read transaction the `current_owner` dependency leaves open.
         await db.execute(text("SELECT 1"))
         assert db.in_transaction()
-        return await answer_question(db, owner, QUESTION)
+        return await final_answer(stream_answer_question(db, owner, QUESTION))
 
     result = in_session(db_sessions, ask_in_open_transaction)
 

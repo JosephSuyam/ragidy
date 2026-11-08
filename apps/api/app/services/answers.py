@@ -4,7 +4,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.state import Answer, Retrieve
-from app.agents.workflows import answer, stream_answer
+from app.agents.workflows import stream_answer
 from app.core.config import get_settings
 from app.rag.retrieval import embed_query
 from app.repositories.vector.chunks import search
@@ -13,20 +13,12 @@ from app.schemas.chunks import RetrievedChunk
 TOP_K = 5
 
 
-async def answer_question(db: AsyncSession, owner_id: UUID, question: str) -> Answer:
-    """Answer from the owner's ready chunks embedded by the configured embed model (ADR 0007).
-
-    Commits `db` at start and after each retrieval, so pending writes are committed and row
-    locks (e.g. `lock_write_owner`) released; call it before any write or owner lock.
-    """
-    return await answer(question, await _owner_retrieve(db, owner_id))
-
-
 async def stream_answer_question(
     db: AsyncSession, owner_id: UUID, question: str
 ) -> AsyncIterator[str | Answer]:
-    """Stream `answer_question`: the generate node's text tokens, then one final Answer.
+    """Stream the generate node's text tokens, then one final Answer.
 
+    Uses the owner's ready chunks embedded by the configured embed model (ADR 0007).
     Commits `db` at start and after each retrieval, so pending writes are committed and row
     locks (e.g. `lock_write_owner`) released; call it before any write or owner lock.
     """
