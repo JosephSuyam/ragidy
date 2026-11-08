@@ -14,6 +14,8 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - Set `hide_parameters=True` on the SQLAlchemy engine, because an escaping DB error otherwise logs its bound values (user questions, answers) through uvicorn's traceback. (api, 2026-11-08)
 - Register a `RequestValidationError` handler that returns only `type`, `loc` and `msg`, because FastAPI's default 422 body echoes each error's `input`, so a login with an invalid password sends the password back. (api, 2026-11-08)
 - Set `num_workers` on LlamaIndex embed models, because without it `aget_text_embedding_batch` sends every batch at once with `asyncio.gather` (about 25 OpenAI or 250 Ollama parallel requests for a 5 MB file). (api, 2026-11-08)
+- Never rely on `ChatGoogleGenerativeAI(vertexai=False)` to keep Google on AI Studio; reject `GOOGLE_GENAI_USE_VERTEXAI` / `GOOGLE_GENAI_USE_ENTERPRISE` set to `true`/`1` in the factory, because google-genai 3.0 reads those env vars itself when building its `Client` and then sends the AI Studio key to `aiplatform.googleapis.com` (caught in review; the first test only read back the LangChain field). (api, 2026-11-09)
+- Pass `MAX_RETRIES + 1` as `max_retries` to `ChatGoogleGenerativeAI`, because langchain-google-genai maps it to google-genai `HttpRetryOptions(attempts=...)`, which counts total attempts, not retries (unlike the Anthropic, OpenAI and Groq SDKs). (api, 2026-11-09)
 
 ## Web
 - In Vite `server.proxy`, scrub `req.url` in an `error` listener added in `configure`, because `configure` runs before Vite attaches its own error logger, which prints `req.url` with the query (OAuth codes). (web, 2026-11-06)
