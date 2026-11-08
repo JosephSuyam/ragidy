@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, insert, literal, select
+from sqlalchemy import ColumnElement, delete, insert, literal, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,12 @@ async def list_chats(db: AsyncSession, owner_id: UUID) -> Sequence[Chat]:
 
 async def get_chat(db: AsyncSession, owner_id: UUID, chat_id: UUID) -> Chat | None:
     return await db.scalar(select(Chat).where(Chat.id == chat_id, Chat.owner_id == owner_id))
+
+
+async def delete_chat(db: AsyncSession, owner_id: UUID, chat_id: UUID) -> bool:
+    """Delete the owner's chat and its messages (cascade); flush only, the caller commits."""
+    stmt = delete(Chat).where(Chat.id == chat_id, Chat.owner_id == owner_id).returning(Chat.id)
+    return await db.scalar(stmt) is not None
 
 
 async def list_messages(db: AsyncSession, owner_id: UUID, chat_id: UUID) -> Sequence[Message]:
