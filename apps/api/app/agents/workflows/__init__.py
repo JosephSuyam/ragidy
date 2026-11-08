@@ -157,15 +157,6 @@ _builder.add_edge("not_found", END)
 graph = _builder.compile()
 
 
-def _start(question: str) -> CorrectiveRagState:
-    return {"question": question, "query": question, "rewrites": 0}
-
-
-async def answer(question: str, retrieve: Retrieve) -> Answer:
-    state = await graph.ainvoke(_start(question), context=AnswerContext(retrieve=retrieve))
-    return Answer(answer=state["answer"], citations=state["citations"])
-
-
 async def stream_answer(question: str, retrieve: Retrieve) -> AsyncIterator[str | Answer]:
     """Yield the generate node's text tokens, then exactly one final Answer.
 
@@ -175,7 +166,7 @@ async def stream_answer(question: str, retrieve: Retrieve) -> AsyncIterator[str 
     tokens are never yielded.
     """
     async for part in graph.astream(
-        _start(question),
+        {"question": question, "query": question, "rewrites": 0},
         context=AnswerContext(retrieve=retrieve),
         stream_mode=["messages", "updates"],
         version="v2",

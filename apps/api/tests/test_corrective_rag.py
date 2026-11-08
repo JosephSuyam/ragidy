@@ -3,7 +3,7 @@ from collections.abc import Callable
 from uuid import UUID, uuid4
 
 import pytest
-from conftest import StubChatModel
+from conftest import StubChatModel, final_answer
 
 from app.agents.state import Answer
 from app.agents.workflows import (
@@ -12,7 +12,6 @@ from app.agents.workflows import (
     NOT_FOUND_ANSWER,
     REWRITE_PROMPT,
     SNIPPET_CHARS,
-    answer,
     stream_answer,
 )
 from app.schemas.chunks import RetrievedChunk
@@ -58,7 +57,7 @@ def test_relevant_chunks_give_an_answer_with_deduplicated_citations(
     chat_model.reply = "Ragidy is a RAG app."
     retrieve = FakeRetrieve(chunks)
 
-    result = asyncio.run(answer(QUESTION, retrieve))
+    result = asyncio.run(final_answer(stream_answer(QUESTION, retrieve)))
 
     assert result["answer"] == "Ragidy is a RAG app."
     assert result["citations"] == [
@@ -81,7 +80,7 @@ def test_irrelevant_chunks_rewrite_twice_then_not_found(chat_model: StubChatMode
     chat_model.reply = "rewritten query"
     retrieve = FakeRetrieve(*([_chunk(f"Off topic {n}.", uuid4(), None)] for n in range(3)))
 
-    result = asyncio.run(answer(QUESTION, retrieve))
+    result = asyncio.run(final_answer(stream_answer(QUESTION, retrieve)))
 
     assert result == {"answer": NOT_FOUND_ANSWER, "citations": []}
     assert retrieve.queries == [QUESTION, "rewritten query", "rewritten query"]
@@ -97,7 +96,7 @@ def test_repeated_chunks_after_a_rewrite_are_not_found_without_regrading(
         [_chunk("Second.", doc, 2, 0.7), _chunk("First.", doc, 1, 0.6)],
     )
 
-    result = asyncio.run(answer(QUESTION, retrieve))
+    result = asyncio.run(final_answer(stream_answer(QUESTION, retrieve)))
 
     assert result == {"answer": NOT_FOUND_ANSWER, "citations": []}
     assert len(retrieve.queries) == 2
@@ -114,7 +113,7 @@ def test_answer_after_a_rewrite_cites_only_the_second_rounds_chunks(
         [_chunk("Ragidy is a RAG app.", second, 2), _chunk("Unrelated.", second, 3)],
     )
 
-    result = asyncio.run(answer(QUESTION, retrieve))
+    result = asyncio.run(final_answer(stream_answer(QUESTION, retrieve)))
 
     assert result == {
         "answer": chat_model.reply,
@@ -144,7 +143,7 @@ def test_rewrite_reply_is_cleaned_into_the_next_query(
     chat_model.reply = reply
     retrieve = FakeRetrieve([_chunk("Off topic.", uuid4(), None)], [])
 
-    asyncio.run(answer(QUESTION, retrieve))
+    asyncio.run(final_answer(stream_answer(QUESTION, retrieve)))
 
     assert retrieve.queries == [QUESTION, next_query]
 
@@ -152,7 +151,7 @@ def test_rewrite_reply_is_cleaned_into_the_next_query(
 def test_empty_retrieval_is_not_found_without_llm_calls(chat_model: StubChatModel) -> None:
     retrieve = FakeRetrieve([])
 
-    result = asyncio.run(answer(QUESTION, retrieve))
+    result = asyncio.run(final_answer(stream_answer(QUESTION, retrieve)))
 
     assert result == {"answer": NOT_FOUND_ANSWER, "citations": []}
     assert retrieve.queries == [QUESTION]
@@ -165,7 +164,7 @@ def test_out_of_range_grade_index_is_ignored(chat_model: StubChatModel, bad_inde
     chat_model.grades = [[bad_index, 0]]
     retrieve = FakeRetrieve([_chunk("Ragidy is a RAG app.", doc, None)])
 
-    result = asyncio.run(answer(QUESTION, retrieve))
+    result = asyncio.run(final_answer(stream_answer(QUESTION, retrieve)))
 
     assert result["citations"] == [
         {"document_id": doc, "source": "a.pdf", "page": None, "snippet": "Ragidy is a RAG app."}

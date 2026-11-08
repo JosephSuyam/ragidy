@@ -319,6 +319,51 @@ def test_login_email_length_cap_422() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("field", ["email", "password"])
+def test_register_nul_422_stores_nothing(client: TestClient, db_engine: Engine, field: str) -> None:
+    body = {"email": BOB, "password": PASSWORD}
+    body[field] = f"{body[field]}\x00{uuid.uuid4().hex}"
+
+    response = client.post("/auth/register", json=body)
+
+    assert response.status_code == 422, response.text
+    assert "set-cookie" not in response.headers
+    assert (
+        count(db_engine, "users"),
+        count(db_engine, "owners"),
+        count(db_engine, "sessions"),
+    ) == (
+        0,
+        0,
+        0,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("field", ["email", "password"])
+def test_login_nul_422_consumes_no_failure_or_rate_slot(
+    db_override: GetDb, db_engine: Engine, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    monkeypatch.setenv("LOGIN_MAX_FAILURES", "1")
+    monkeypatch.setenv(
+        "RATE_LIMIT_AUTH_PER_MINUTE", "2"
+    )  # register takes one, valid login the other
+    with app_client(db_override) as client:
+        register(client)
+        sessions_before = count(db_engine, "sessions")
+        for _ in range(5):
+            body = {"email": EMAIL, "password": PASSWORD}
+            body[field] = f"{body[field]}\x00{uuid.uuid4().hex}"
+            response = client.post("/auth/login", json=body)
+            assert response.status_code == 422, response.text
+            assert "set-cookie" not in response.headers
+        assert count(db_engine, "sessions") == sessions_before
+
+        valid = login(client)
+    assert valid.status_code == 200, valid.text
+
+
+@pytest.mark.integration
 def test_register_display_name_email_logs_in(client: TestClient, db_engine: Engine) -> None:
     assert register(client, email="Alice <alice@example.com>").json()["email"] == EMAIL
     client.cookies.clear()

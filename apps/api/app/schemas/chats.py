@@ -4,10 +4,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from app.schemas.common import NO_NUL
+
 TITLE_MAX_CHARS = 200
 CONTENT_MAX_CHARS = 4000
-# Postgres text rejects NUL, so refuse it here as a 422 instead of a 500 at INSERT.
-NO_NUL = r"^[^\x00]*$"
 
 
 class ChatCreate(BaseModel):

@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 from alembic import command
+from app.agents.state import Answer
 from app.agents.workflows import Grade
 from app.api.deps import DbSession, WriteOwner, client_ip_key
 from app.core import providers, storage
@@ -503,6 +504,14 @@ Sessions = async_sessionmaker[AsyncSession]
 
 def run[T](coro: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coro, loop_factory=asyncio.SelectorEventLoop)
+
+
+async def final_answer(stream: AsyncIterator[str | Answer]) -> Answer:
+    """Drain a streaming answer; assert that its last item is the only Answer, then return it."""
+    *tokens, final = [part async for part in stream]
+    assert all(isinstance(token, str) for token in tokens)
+    assert isinstance(final, dict)
+    return final
 
 
 def in_session[T](sessions: Sessions, call: Callable[[AsyncSession], Awaitable[T]]) -> T:
