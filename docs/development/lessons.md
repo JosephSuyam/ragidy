@@ -12,6 +12,7 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - Reject a DOCX DOCTYPE only after requiring strict UTF-8 with no NUL bytes, because expat auto-detects UTF-16 even with `XMLParser(encoding="utf-8")`, so a UTF-16 `<!DOCTYPE` slips past a byte check and its entities expand. (api, 2026-11-08)
 - Strip `\x00` from parsed text before storing it, and reject it with `422` in every free-text request schema, because Postgres `text` refuses NUL: pypdf `extract_text()` emits it for some fonts (rejected after the embeddings were paid), and a request that reaches the INSERT fails with a 500. (api, 2026-11-08)
 - Set `hide_parameters=True` on the SQLAlchemy engine, because an escaping DB error otherwise logs its bound values (user questions, answers) through uvicorn's traceback. (api, 2026-11-08)
+- Register a `RequestValidationError` handler that returns only `type`, `loc` and `msg`, because FastAPI's default 422 body echoes each error's `input`, so a login with an invalid password sends the password back. (api, 2026-11-08)
 - Set `num_workers` on LlamaIndex embed models, because without it `aget_text_embedding_batch` sends every batch at once with `asyncio.gather` (about 25 OpenAI or 250 Ollama parallel requests for a 5 MB file). (api, 2026-11-08)
 
 ## Web

@@ -45,7 +45,7 @@ Add each new endpoint here: method, path, request, response, and error codes.
   - Document retries: `DOCUMENT_RETRY_PER_HOUR` per owner. Every attempt by an owner counts, before the status check, so a `404` or `409` takes a slot too.
   - Chat messages: `CHAT_MESSAGES_PER_HOUR_<tier>` per owner. The count is taken after the chat lookup, so a `404` takes no slot, and before any LLM call.
 - All rate-limit counters are in memory, so they hold only for a single API process.
-- Request validation errors keep FastAPI's default `422` body. Free-text fields (`title`, `content`) containing a NUL character (`\u0000`) get `422`. A `POST /documents` without a `file` part gets that body too.
+- Request validation errors return `422 {"detail": [{"type": "<type>", "loc": [...], "msg": "<message>"}]}`. The body never includes the submitted value (no `input`, `ctx` or `url`), so a rejected password is not echoed back. A NUL character (`\u0000`) in any free-text field gets `422`: auth `email` and `password`, `POST /documents/url` `url`, chat `title` and message `content`. A `POST /documents` without a `file` part gets that body too.
 - A malformed multipart body, or one with more than one file or any other part, gets Starlette's `400 {"detail": "<message>"}`, without a `code`.
 
 ## Guest cookie
