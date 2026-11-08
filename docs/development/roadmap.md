@@ -12,7 +12,7 @@ Build order for the MVP in `docs/architecture/requirements.md` (R1-R14). Status 
 8. Upload and URL ingestion with tier limits and caps (R7-R9): done (PR #15: `POST /documents`, `POST /documents/url`: object storage + pending `documents` row)
 9. Ingestion worker: parse, chunk, embed, index into pgvector; status and retry (R11): done (PR #16, ADR 0006: `make worker`, `chunks` table, `GET /documents`, `GET /documents/{id}`, `POST /documents/{id}/retry`; R11 AC1-3, AC4 is step 13)
 10. Retrieval and generation (corrective RAG); test RAG on its own: done (PR #19, ADR 0007: `answer_question` service, owner-scoped pgvector search, LangGraph corrective loop; no endpoint yet, R12 ACs close in step 11)
-11. LangGraph chat: SSE answers with citations, history, per-hour limit (R12-R13): done (PR #TBD, ADR 0008: `POST /chats`, `GET /chats`, `GET /chats/{id}/messages`, `POST /chats/{id}/messages` SSE; history is `messages` rows, no checkpointer; R12-R13 ACs, R1 AC1-2)
+11. LangGraph chat: SSE answers with citations, history, per-hour limit (R12-R13): done (PR #20, ADR 0008: `POST /chats`, `GET /chats`, `GET /chats/{id}/messages`, `POST /chats/{id}/messages` SSE; history is `messages` rows, no checkpointer; R12-R13 ACs, R1 AC1-2)
 12. Deletion and guest purge (R10, R14): next
 13. React frontend: auth, upload, document status/retry, chat, sources, `packages/shared-types`
 14. Testing and deployment: SeaweedFS hardening, e2e, Linux `extra_hosts` for Ollama, promote `develop` → `staging` → `main`
