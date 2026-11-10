@@ -1,5 +1,5 @@
-# apps/api/.env supplies the S3_* credentials that compose interpolates for seaweedfs
-COMPOSE := docker compose $(if $(wildcard apps/api/.env),--env-file apps/api/.env) -f infrastructure/docker/docker-compose.yml
+# .env supplies the S3_* credentials that compose interpolates for seaweedfs
+COMPOSE := docker compose $(if $(wildcard .env),--env-file .env) -f infrastructure/docker/docker-compose.yml
 CHECK := python infrastructure/scripts/check.py
 
 .PHONY: help install db s3 db-down migrate api worker web check fast check-api check-web up images types

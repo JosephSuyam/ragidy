@@ -1,14 +1,15 @@
 """Write the API OpenAPI schema to packages/shared-types/openapi.json (LF endings)."""
 
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "api"))
-os.chdir(tempfile.mkdtemp())  # Settings reads ./.env; an empty cwd means no .env can load
+
+from app.core.config import Settings  # noqa: E402
+
+Settings.model_config["env_file"] = None  # no .env may load while dumping the schema
 
 from app.main import app  # noqa: E402
 
