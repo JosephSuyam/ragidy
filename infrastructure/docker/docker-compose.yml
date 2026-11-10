@@ -7,7 +7,7 @@ x-api: &api
     context: ../..
     dockerfile: infrastructure/docker/api.Dockerfile
   env_file:
-    - path: ../../apps/api/.env
+    - path: ../../.env
       required: false
   environment:
     DATABASE_URL: postgresql+psycopg://ragidy:ragidy@db:5432/ragidy

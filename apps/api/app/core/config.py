@@ -35,7 +35,9 @@ def _split_csv(value: Any) -> list[str]:
 
 class Settings(BaseSettings):
     # Errors hide input so str(exc) never leaks secrets; exc.errors() still has it: never log that.
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
+    model_config = SettingsConfigDict(
+        env_file="../../.env", extra="ignore", hide_input_in_errors=True
+    )
 
     llm_provider: Literal["anthropic", "openai", "ollama", "google", "groq"] = "anthropic"
     llm_model: str = "claude-sonnet-5-5"

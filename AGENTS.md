@@ -46,14 +46,14 @@ Empty folders hold a placeholder (`__init__.py` or `.gitkeep`) until their first
 ```bash
 make install        # uv sync + npm install
 make db             # Postgres + pgvector on :5432
-make s3             # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
+make s3             # SeaweedFS S3 on :8333; needs S3_* in .env
 make migrate        # apply Alembic migrations; needs make db
 make api            # API on :8000 (reload)
 make worker         # ingestion worker; needs make db, make s3, make migrate
 make web            # web on :5173
 make check          # full quality gate; `make fast` skips integration tests
 make types          # regenerate packages/shared-types (openapi.json, api.d.ts) from the API schema
-make up             # full stack from production images; needs S3_* in apps/api/.env
+make up             # full stack from production images; needs S3_* in .env
 ```
 Without `make`, run the commands in `Makefile` directly. The gate is `python infrastructure/scripts/check.py [--api|--web] [--fast]`.
 Code navigation: when `graphify-out/graph.json` exists, run `graphify query "<question>"` (or `path`, `explain`) before grepping or reading source, and `graphify update .` after code changes.
