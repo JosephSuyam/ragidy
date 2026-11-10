@@ -11,18 +11,18 @@ Chat with your files and links using Retrieval-Augmented Generation. LlamaIndex 
 
 ## Setup
 ```bash
-cp .env.example apps/api/.env   # then fill in the API keys; set S3_* to any random values (openssl rand -hex 20)
+cp .env.example .env   # then fill in the API keys; set S3_* to any random values (openssl rand -hex 20)
 make install
 make db
 make migrate                    # apply DB migrations; needs make db
-make s3                         # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
+make s3                         # SeaweedFS S3 on :8333; needs S3_* in .env
 make api                        # http://localhost:8000/health
 make worker                     # ingestion worker; needs make db, make s3, make migrate
 make web                        # http://localhost:5173; proxies /api/* to :8000
 make types                      # regenerate packages/shared-types after an API schema change
 ```
 
-`make up` runs the full stack from production images instead (needs `S3_*` in `apps/api/.env`). Open http://localhost:8080: the web container serves the app and proxies `/api/*` to the API. Compose sets `PUBLIC_BASE_URL=http://localhost:8080` and `TRUSTED_PROXIES=10.80.80.10` for that stack, on a fixed `proxy` network `10.80.80.0/24`. If that subnet clashes with a local network or VPN (Docker reports `Pool overlaps with other one on this address space`), change the subnet, the web `ipv4_address` and `TRUSTED_PROXIES` together in `infrastructure/docker/docker-compose.yml`.
+`make up` runs the full stack from production images instead (needs `S3_*` in `.env`). Open http://localhost:8080: the web container serves the app and proxies `/api/*` to the API. Compose sets `PUBLIC_BASE_URL=http://localhost:8080` and `TRUSTED_PROXIES=10.80.80.10` for that stack, on a fixed `proxy` network `10.80.80.0/24`. If that subnet clashes with a local network or VPN (Docker reports `Pool overlaps with other one on this address space`), change the subnet, the web `ipv4_address` and `TRUSTED_PROXIES` together in `infrastructure/docker/docker-compose.yml`.
 
 Open the dev app at `http://localhost:5173`, never `127.0.0.1`: `PUBLIC_BASE_URL` must equal the browser origin, or writes return `403 origin_mismatch`.
 
