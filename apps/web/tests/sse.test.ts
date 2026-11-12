@@ -93,3 +93,12 @@ test('multi-line data fields are joined with a newline before JSON.parse', async
 
   expect(events).toEqual([{ event: 'token', data: { text: 'x' } }])
 })
+
+test('a response with no body resolves with no events', async () => {
+  expect(await collect(new Response(null))).toEqual([])
+})
+
+// Pinned: a data line that is not JSON rejects the whole read, so later frames in the stream are never delivered.
+test('a data line that is not valid JSON rejects with SyntaxError', async () => {
+  await expect(collect(sseResponse('event: token\ndata: {bad\n\nevent: done\ndata: {}\n\n'))).rejects.toThrow(SyntaxError)
+})

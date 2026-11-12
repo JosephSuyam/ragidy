@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from '@/App'
 import { api, clearSessionState } from '@/services/api'
@@ -88,9 +88,23 @@ function chatPosts(fetchMock: ReturnType<typeof mockSession>) {
   return fetchMock.mock.calls.filter(([url, init]) => url === '/api/chats' && init?.method === 'POST')
 }
 
-function mockSession(current: () => unknown, onPost?: (url: string) => Response | Promise<Response>) {
+type HeldMe = { armed: boolean; signal?: AbortSignal; release?: (r: Response) => void }
+
+// While `held.armed` is set, /me requests hang and keep their signal and resolver in `held`.
+function holdMe(held: HeldMe) {
+  return (signal?: AbortSignal) => {
+    if (!held.armed) return undefined
+    return new Promise<Response>((resolve) => Object.assign(held, { signal, release: resolve }))
+  }
+}
+
+function mockSession(
+  current: () => unknown,
+  onPost?: (url: string) => Response | Promise<Response>,
+  onMe?: (signal?: AbortSignal) => Promise<Response> | undefined,
+) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url === '/api/me') return Response.json(current())
+    if (url === '/api/me') return onMe?.(init?.signal ?? undefined) ?? Response.json(current())
     if (url === '/api/auth/providers') return Response.json([])
     if (url === '/api/documents') return Response.json([])
     if (url === '/api/chats' && init?.method === 'GET') return Response.json([])
@@ -230,8 +244,6 @@ test('visibility change with a changed owner engages the gate and remounts', asy
   const fetchMock = mockSession(() => current)
   render(<App />)
   const documents = await screen.findByRole('region', { name: 'Documents' })
-  // The owner check re-subscribes in an effect after /me lands; let that effect run before the tab returns.
-  await act(() => new Promise((r) => setTimeout(r)))
   current = me
   changeVisibility()
   expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument()
@@ -245,6 +257,72 @@ test('visibility change with a changed owner engages the gate and remounts', asy
     expect(chatPosts(fetchMock)).toHaveLength(2)
   })
   await Promise.all(writes)
+})
+
+test('a me change during an in-flight visibility check does not abort it, and its owner change still remounts', async () => {
+  let current: unknown = me
+  const held: HeldMe = { armed: false }
+  const fetchMock = mockSession(
+    () => current,
+    () => Response.json({}, { status: 201 }),
+    holdMe(held),
+  )
+  render(<App />)
+  const documents = await screen.findByRole('region', { name: 'Documents' })
+
+  held.armed = true
+  changeVisibility()
+  await vi.waitFor(() => expect(held.release).toBeDefined())
+  held.armed = false
+
+  current = { ...me, guest_expires_at: '2999-01-01T00:00:00Z' }
+  await api.post('/uploads')
+  await screen.findByText(/Guest session expires/)
+  expect(fetchMock.mock.calls.filter(([url]) => url === '/api/me')).toHaveLength(3)
+  expect(held.signal?.aborted).toBe(false)
+  expect(screen.getByRole('region', { name: 'Documents' })).toBe(documents)
+
+  held.release?.(Response.json(user))
+  await waitFor(() => expect(screen.getByRole('region', { name: 'Documents' })).not.toBe(documents))
+})
+
+test('a visibility check resolving with the refreshed me does not remount', async () => {
+  let current: unknown = me
+  const held: HeldMe = { armed: false }
+  mockSession(
+    () => current,
+    () => Response.json({}, { status: 201 }),
+    holdMe(held),
+  )
+  render(<App />)
+  const documents = await screen.findByRole('region', { name: 'Documents' })
+
+  held.armed = true
+  changeVisibility()
+  await vi.waitFor(() => expect(held.release).toBeDefined())
+  held.armed = false
+
+  const refreshed = { ...me, guest_expires_at: '2999-01-01T00:00:00Z' }
+  current = refreshed
+  await api.post('/uploads')
+  await screen.findByText(/Guest session expires/)
+
+  held.release?.(Response.json(refreshed))
+  await new Promise((r) => setTimeout(r))
+  expect(screen.getByRole('region', { name: 'Documents' })).toBe(documents)
+})
+
+test('unmounting the provider aborts an in-flight visibility check', async () => {
+  const held: HeldMe = { armed: false }
+  mockSession(() => user, undefined, holdMe(held))
+  const { unmount } = render(<App />)
+  await screen.findByRole('region', { name: 'Documents' })
+
+  held.armed = true
+  changeVisibility()
+  await vi.waitFor(() => expect(held.release).toBeDefined())
+  unmount()
+  expect(held.signal?.aborted).toBe(true)
 })
 
 test('visibility change from guest A to guest B remounts', async () => {

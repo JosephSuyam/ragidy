@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MeResponse } from '@shared/index'
 import { SessionContext } from '@/hooks/useSession'
 import { api, setSessionHandler, setSessionState } from '@/services/api'
@@ -7,6 +7,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<MeResponse | null>(null)
   const [failed, setFailed] = useState(false)
   const [sessionVersion, setVersion] = useState(0)
+
+  const meRef = useRef(me)
+  useLayoutEffect(() => {
+    meRef.current = me
+  }, [me])
 
   const apply = useCallback((next: MeResponse, remount = true) => {
     setSessionState(next)
@@ -38,7 +43,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (document.visibilityState !== 'visible') return
       api.get<MeResponse>('/me', c.signal).then(
         (next) => {
-          const prev = me
+          const prev = meRef.current
           const ownerChanged =
             !!prev &&
             (prev.tier !== next.tier ||
@@ -54,7 +59,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', onVisible)
       c.abort()
     }
-  }, [apply, me])
+  }, [apply])
 
   useEffect(() => {
     setSessionHandler(apply)

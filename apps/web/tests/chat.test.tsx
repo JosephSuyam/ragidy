@@ -580,3 +580,95 @@ test('a title cut at 200 characters keeps an emoji whole, with no lone surrogate
   streams[0].push('done', {})
   streams[0].close()
 })
+
+test('a failed chat create on first send shows the error, rolls back the optimistic messages, and posts no message', async () => {
+  const fetchMock = mockServer([], (method, url) => {
+    if (method === 'POST' && url === CHATS) return Response.json({ code: 'internal', detail: 'Could not create the chat.' }, { status: 500 })
+  })
+  renderPanel()
+  await screen.findByText('No chats yet. Ask a question to start one.')
+
+  ask('First?')
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not create the chat.')
+  expect(screen.queryByText('First?')).not.toBeInTheDocument()
+  expect(screen.queryByText('Assistant')).not.toBeInTheDocument()
+  expect(requestsWith(fetchMock, 'POST')).toEqual([CHATS])
+})
+
+test('a failed history load shows an alert', async () => {
+  mockServer([ALPHA], (method, url) => {
+    if (method === 'GET' && url === `${CHATS}/${ALPHA.id}/messages`) {
+      return Response.json({ code: 'not_found', detail: 'Chat not found.' }, { status: 404 })
+    }
+  })
+  renderPanel()
+  fireEvent.click(await screen.findByRole('button', { name: 'Alpha' }))
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Chat not found.')
+  expect(screen.queryByText('Loading messages…')).not.toBeInTheDocument()
+})
+
+test('a 422 on send shows its detail and rolls back to the earlier messages', async () => {
+  mockServer(
+    [ALPHA],
+    (method, url) => {
+      if (method === 'POST' && url === `${CHATS}/${ALPHA.id}/messages`) {
+        return Response.json({ code: 'invalid_message', detail: 'Message is not allowed.' }, { status: 422 })
+      }
+    },
+    { [ALPHA.id]: [{ role: 'user', content: 'Earlier?', citations: [] }, { role: 'assistant', content: 'Earlier answer.', citations: [] }] },
+  )
+  renderPanel()
+  await selectChat('Alpha')
+
+  ask('Bad question')
+  expect(await screen.findByRole('alert')).toHaveTextContent('Message is not allowed.')
+  expect(screen.queryByText('Bad question')).not.toBeInTheDocument()
+  expect(screen.getByText('Earlier answer.')).toBeInTheDocument()
+  expect(screen.getAllByText(/^(You|Assistant)$/)).toHaveLength(2)
+})
+
+test('the error alert clears when the next send starts', async () => {
+  const streams: Stream[] = []
+  let reject = true
+  mockServer(
+    [ALPHA],
+    (method, url, init) => {
+      if (method === 'POST' && url === `${CHATS}/${ALPHA.id}/messages` && reject) {
+        return Response.json({ code: 'invalid_message', detail: 'Message is not allowed.' }, { status: 422 })
+      }
+      return streamHandler(streams)(method, url, init)
+    },
+    { [ALPHA.id]: [] },
+  )
+  renderPanel()
+  await selectChat('Alpha')
+
+  ask('First try')
+  expect(await screen.findByRole('alert')).toHaveTextContent('Message is not allowed.')
+  await waitFor(() => expect(screen.getByLabelText('Message')).not.toHaveAttribute('readonly'))
+
+  reject = false
+  ask('Second try')
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  await waitFor(() => expect(streams).toHaveLength(1))
+  streams[0].push('done', {})
+  streams[0].close()
+})
+
+test('unmounting while the create POST is pending sends no message', async () => {
+  const created = deferred<Response>()
+  const fetchMock = mockServer([ALPHA], (method, url) => {
+    if (method === 'POST' && url === CHATS) return created.promise
+  })
+  const { unmount } = renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+
+  ask('Early')
+  await waitFor(() => expect(requestsWith(fetchMock, 'POST')).toEqual([CHATS]))
+  unmount()
+  created.resolve(Response.json({ id: NEW_ID, title: 'Early', created_at: ALPHA.created_at }, { status: 201 }))
+  await flush()
+
+  expect(requestsWith(fetchMock, 'POST')).toEqual([CHATS])
+})
