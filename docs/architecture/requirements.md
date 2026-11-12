@@ -120,11 +120,13 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [x] With no ready documents, or no relevant chunk after 2 rewrites, the answer says it was not found in the document and cites nothing.
 - [x] Another owner's chat id returns `404`.
 - [x] An owner may send `CHAT_MESSAGES_PER_HOUR_<tier>` messages an hour. Over that, `POST /chats/{id}/messages` returns `429 rate_limited` with `Retry-After` before any LLM call.
+- [x] The UI streams the answer as it arrives and shows each citation's source, page and snippet as text. The composer shows the hourly message limit. A stream that ends without `done`, or fails after it opened, shows "The answer was interrupted. Try again." and keeps the question (it is stored; a partial answer is not). An `error` event drops the partial answer and shows its detail. A `429` shows the retry seconds.
 
 ### R13 History
 - [x] `GET /chats` lists the owner's chats, newest first.
 - [x] `GET /chats/{id}/messages` returns the messages in order, with the citations of each assistant message.
 - [x] History survives an API restart and the guest-to-user migration.
+- [x] The UI lists the owner's chats, opens one with its history and citations, and a new chat is created on the first send, titled with the question (first 200 characters).
 
 ### R14 Deletion
 - [x] `DELETE /documents/{id}` returns `204` and deletes the row, the object and the vectors. Later answers never cite it.
