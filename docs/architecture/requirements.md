@@ -83,7 +83,7 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
   | `md` | `text/markdown`, or `text/plain` when the filename or URL path ends in `.md` |
   | `html` | `text/html` |
 - [x] At startup, an unknown name (for example `UPLOAD_TYPES_GUEST=pdf,exe`) or an empty list fails with an error that names the setting and the value. Names are trimmed and lowercased.
-- [ ] `GET /me` returns the owner's tier limits: `max_upload_mb`, `upload_types`, `max_docs` and `chat_messages_per_hour`. The UI uses them to reject a file by size or type before it uploads; the server still enforces every limit.
+- [x] `GET /me` returns the owner's tier limits: `max_upload_mb`, `upload_types`, `max_docs` and `chat_messages_per_hour`. The UI uses them to reject a file by size or type before it uploads; the server still enforces every limit.
 
 ### R8 URL ingestion limits
 - [x] Fetched URL content over `UPLOAD_MAX_MB_<tier>` MiB returns `413 too_large` and writes nothing. The fetch sends `Accept-Encoding: identity` and counts the raw bytes, and reading stops at the first chunk past the limit.
@@ -109,7 +109,7 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [x] Upload and URL return `202` with the document and status `pending`. `GET /documents/{id}` shows `status`, `error` and `attempts`.
 - [x] Status moves `pending → processing → ready | failed`, with 3 attempts in total (ADR 0002). A `failed` document has a non-empty `error`.
 - [x] `POST /documents/{id}/retry` on a `failed` or `ready` document returns `202` with status `pending` and `attempts` 0. On `pending` or `processing` it returns `409 document_busy`. An owner may make `DOCUMENT_RETRY_PER_HOUR` retry attempts an hour; every attempt counts, and over that it returns `429 rate_limited` with `Retry-After`.
-- [ ] The UI shows each document's status and a retry action on `failed`.
+- [x] The UI shows each document's status and a retry action on `failed`.
 
 ### R12 Chat with citations
 - [x] `POST /chats` inserts the chat in one transaction after `SELECT ... FOR UPDATE` on the owner's `owners` row, like the R9 insert. If the row is gone (the guest was purged or migrated mid-request), it returns `401 session_expired` and creates no chat. Rule: every write that depends on a guest-owned row (document, URL, chat or message insert) takes this owner-row lock first, and returns `401 session_expired` when the owner row or the row it depends on is gone.
