@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from '@/App'
 import { api, clearSessionState } from '@/services/api'
@@ -16,6 +16,7 @@ function mockApi(post?: Response) {
     if (url === '/api/me') return Response.json(me)
     if (url === '/api/auth/providers') return Response.json([{ id: 'github', name: 'GitHub' }])
     if (url === '/api/documents') return Response.json([])
+    if (url === '/api/chats' && init?.method === 'GET') return Response.json([])
     if (init?.method === 'POST' && post) return post.clone()
     throw new Error(`unexpected ${url}`)
   })
@@ -82,11 +83,17 @@ const user = { ...me, tier: 'user', email: 'a@b.co' }
 
 const releaseChats: (() => void)[] = []
 
+// Counts only chat creations, so the mount-time GET /api/chats list load is not a write.
+function chatPosts(fetchMock: ReturnType<typeof mockSession>) {
+  return fetchMock.mock.calls.filter(([url, init]) => url === '/api/chats' && init?.method === 'POST')
+}
+
 function mockSession(current: () => unknown, onPost?: (url: string) => Response | Promise<Response>) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/me') return Response.json(current())
     if (url === '/api/auth/providers') return Response.json([])
     if (url === '/api/documents') return Response.json([])
+    if (url === '/api/chats' && init?.method === 'GET') return Response.json([])
     if (init?.method === 'POST' && url === '/api/chats') return new Promise<Response>((resolve) => releaseChats.push(() => resolve(Response.json({}, { status: 201 }))))
     if (init?.method === 'POST' && onPost) return onPost(url)
     throw new Error(`unexpected ${url}`)
@@ -132,7 +139,7 @@ test('sign out gates writes until logout resolves, then refetches /me and sends 
   )
   render(<App />)
   fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
-  const chatCalls = () => fetchMock.mock.calls.filter(([url]) => url === '/api/chats').length
+  const chatCalls = () => chatPosts(fetchMock).length
 
   const writes = [api.post('/chats'), api.post('/chats')]
   await new Promise((r) => setTimeout(r))
@@ -223,6 +230,8 @@ test('visibility change with a changed owner engages the gate and remounts', asy
   const fetchMock = mockSession(() => current)
   render(<App />)
   const documents = await screen.findByRole('region', { name: 'Documents' })
+  // The owner check re-subscribes in an effect after /me lands; let that effect run before the tab returns.
+  await act(() => new Promise((r) => setTimeout(r)))
   current = me
   changeVisibility()
   expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument()
@@ -230,10 +239,10 @@ test('visibility change with a changed owner engages the gate and remounts', asy
 
   const writes = [api.post('/chats'), api.post('/chats')]
   await new Promise((r) => setTimeout(r))
-  expect(fetchMock.mock.calls.filter(([url]) => url === '/api/chats')).toHaveLength(1)
+  expect(chatPosts(fetchMock)).toHaveLength(1)
   await vi.waitFor(() => {
     releaseChats.splice(0).forEach((release) => release())
-    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/chats')).toHaveLength(2)
+    expect(chatPosts(fetchMock)).toHaveLength(2)
   })
   await Promise.all(writes)
 })

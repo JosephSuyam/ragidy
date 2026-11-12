@@ -1,3 +1,4 @@
+import { ChatPanel } from '@/features/chat/ChatPanel'
 import { DocumentsPanel } from '@/features/sources/DocumentsPanel'
 import { Header } from '@/components/layout/Header'
 
@@ -9,7 +10,9 @@ export function AppShell() {
         <section aria-label="Documents" className="rounded-lg border p-4">
           <DocumentsPanel />
         </section>
-        <section aria-label="Chat" className="rounded-lg border p-4" />
+        <section aria-label="Chat" className="rounded-lg border p-4">
+          <ChatPanel />
+        </section>
       </main>
     </div>
   )
