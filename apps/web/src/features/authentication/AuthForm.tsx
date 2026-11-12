@@ -5,10 +5,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useSession } from '@/hooks/useSession'
 import { navigate } from '@/routes/navigate'
-import { ApiError, api } from '@/services/api'
+import { ApiError, api, errorMessage } from '@/services/api'
 
 function message(err: unknown) {
-  if (!(err instanceof ApiError)) return 'Something went wrong. Try again.'
+  if (!(err instanceof ApiError)) return errorMessage(err)
   switch (err.code) {
     case 'invalid_credentials':
       return 'Wrong email or password.'
@@ -21,7 +21,7 @@ function message(err: unknown) {
         ? 'Too many attempts. Try again later.'
         : `Too many attempts. Try again in ${err.retryAfter} seconds.`
     default:
-      return err.detail
+      return errorMessage(err)
   }
 }
 
