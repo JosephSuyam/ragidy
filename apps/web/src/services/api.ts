@@ -49,20 +49,24 @@ async function toError(res: Response) {
   return new ApiError(res.status, code ?? 'unknown', detail ?? res.statusText, Number.isNaN(retry) ? undefined : retry)
 }
 
-async function send<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function send(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
+  const multipart = body instanceof FormData
   const res = await fetch(`/api${path}`, {
     method,
     signal,
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    // Multipart: the browser sets Content-Type with its boundary.
+    headers: body === undefined || multipart ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : multipart ? body : JSON.stringify(body),
   })
   if (!res.ok) throw await toError(res)
-  return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
+  return res
 }
+
+const parse = <T>(res: Response) => (res.status === 204 ? undefined : res.json()) as Promise<T>
 
 // remount: the owner changed, so state held by mounted views is stale.
 async function refreshMe(signal: AbortSignal | undefined, remount: boolean) {
-  const me = await send<MeResponse>('GET', '/me', undefined, signal)
+  const me = await send('GET', '/me', undefined, signal).then(parse<MeResponse>)
   setSessionState(me)
   onSessionChange?.(me, remount)
 }
@@ -75,30 +79,30 @@ function refreshAfterExpiry(signal: AbortSignal | undefined) {
   return expiredRefresh
 }
 
-async function attempt<T>(method: string, path: string, body: unknown, signal: AbortSignal | undefined, retried: boolean, holding: boolean): Promise<T> {
+async function attempt(method: string, path: string, body: unknown, signal: AbortSignal | undefined, retried: boolean, holding: boolean): Promise<Response> {
   try {
-    return await send<T>(method, path, body, signal)
+    return await send(method, path, body, signal)
   } catch (err) {
     if (retried || !(err instanceof ApiError) || err.code !== 'session_expired') throw err
     await refreshAfterExpiry(signal)
-    return request<T>(method, path, body, signal, true, holding)
+    return request(method, path, body, signal, true, holding)
   }
 }
 
-async function request<T>(
+async function request(
   method: string,
   path: string,
   body?: unknown,
   signal?: AbortSignal,
   retried = false,
   holding = false,
-): Promise<T> {
-  if (method === 'GET' || holding) return attempt<T>(method, path, body, signal, retried, holding)
+): Promise<Response> {
+  if (method === 'GET' || holding) return attempt(method, path, body, signal, retried, holding)
   // Concurrent cookieless writes each create an orphan guest: send the first alone.
   while (!hasSession() && firstWrite) await firstWrite.catch(() => undefined)
-  if (hasSession()) return attempt<T>(method, path, body, signal, retried, false)
+  if (hasSession()) return attempt(method, path, body, signal, retried, false)
   // The new guest's expiry is unknown: fetch it once so later writes gate correctly.
-  const run = attempt<T>(method, path, body, signal, retried, true).then(async (result) => {
+  const run = attempt(method, path, body, signal, retried, true).then(async (result) => {
     if (!hasSession()) await refreshMe(signal, false).catch(() => undefined)
     return result
   })
@@ -110,8 +114,14 @@ async function request<T>(
   }
 }
 
+export function errorMessage(err: unknown) {
+  if (!(err instanceof ApiError)) return 'Something went wrong. Try again.'
+  return err.retryAfter ? `${err.detail} Try again in ${err.retryAfter} seconds.` : err.detail
+}
+
 export const api = {
-  get: <T>(path: string, signal?: AbortSignal) => request<T>('GET', path, undefined, signal),
-  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request<T>('POST', path, body, signal),
-  delete: <T>(path: string, signal?: AbortSignal) => request<T>('DELETE', path, undefined, signal),
+  get: <T>(path: string, signal?: AbortSignal) => request('GET', path, undefined, signal).then(parse<T>),
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) => request('POST', path, body, signal).then(parse<T>),
+  stream: (path: string, body: unknown, signal: AbortSignal) => request('POST', path, body, signal),
+  delete: <T>(path: string, signal?: AbortSignal) => request('DELETE', path, undefined, signal).then(parse<T>),
 }
