@@ -15,6 +15,7 @@ function mockApi(post?: Response) {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/me') return Response.json(me)
     if (url === '/api/auth/providers') return Response.json([{ id: 'github', name: 'GitHub' }])
+    if (url === '/api/documents') return Response.json([])
     if (init?.method === 'POST' && post) return post.clone()
     throw new Error(`unexpected ${url}`)
   })
@@ -85,6 +86,7 @@ function mockSession(current: () => unknown, onPost?: (url: string) => Response 
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/me') return Response.json(current())
     if (url === '/api/auth/providers') return Response.json([])
+    if (url === '/api/documents') return Response.json([])
     if (init?.method === 'POST' && url === '/api/chats') return new Promise<Response>((resolve) => releaseChats.push(() => resolve(Response.json({}, { status: 201 }))))
     if (init?.method === 'POST' && onPost) return onPost(url)
     throw new Error(`unexpected ${url}`)
