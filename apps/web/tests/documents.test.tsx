@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { DocumentOut, MeResponse } from '@shared/index'
 import { DocumentsPanel } from '@/features/sources/DocumentsPanel'
@@ -40,6 +40,8 @@ function holdList(signal?: AbortSignal) {
 function mockServer(docs: DocumentOut[], handle: Handler = () => undefined) {
   const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => {
     const method = init.method ?? 'GET'
+    const res = await handle(method, url, init)
+    if (res) return res
     if (method === 'GET' && url === LIST) {
       if (holdNextLists > 0) {
         holdNextLists--
@@ -47,8 +49,6 @@ function mockServer(docs: DocumentOut[], handle: Handler = () => undefined) {
       }
       return Response.json(docs)
     }
-    const res = handle(method, url, init)
-    if (res) return res
     throw new Error(`unexpected ${method} ${url}`)
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -383,4 +383,124 @@ test('source renders as literal text, never as HTML', async () => {
   await flush()
   expect(screen.getByText(source)).toBeInTheDocument()
   expect(container.querySelector('img')).toBeNull()
+})
+
+test('a failed list shows an alert, and Reload fetches the list again', async () => {
+  let down = true
+  mockServer([doc()], (method, url) => {
+    if (method === 'GET' && url === LIST && down) return Response.json({ code: 'internal', detail: 'Documents are unavailable.' }, { status: 500 })
+  })
+  renderPanel()
+  expect(await screen.findByRole('alert')).toHaveTextContent('Documents are unavailable.')
+  expect(screen.queryByRole('list', { name: 'Document list' })).not.toBeInTheDocument()
+
+  down = false
+  fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+  expect(await screen.findByText('notes.pdf')).toBeInTheDocument()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+test.each([
+  ['url_blocked', 'That address is not allowed.'],
+  ['url_fetch_failed', 'The page could not be fetched.'],
+])('Add URL error %s shows its detail', async (code, detail) => {
+  mockServer([], (method, url) => {
+    if (method === 'POST' && url === '/api/documents/url') return Response.json({ code, detail }, { status: 422 })
+  })
+  renderPanel()
+  await flush()
+  fireEvent.change(screen.getByLabelText('Or add a URL'), { target: { value: 'https://example.com/page' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(detail)
+})
+
+test.each([
+  ['empty', '', 'Enter a URL.'],
+  ['2049-character', `https://e.co/${'a'.repeat(2049 - 'https://e.co/'.length)}`, 'URL is longer than 2048 characters.'],
+])('an %s URL is rejected client-side with no request', async (_name, url, message) => {
+  const fetchMock = mockServer([])
+  renderPanel()
+  await flush()
+  fireEvent.change(screen.getByLabelText('Or add a URL'), { target: { value: url } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(message)
+  expect(requestsWith(fetchMock, 'POST')).toEqual([])
+})
+
+test('a 2048-character URL is at the limit and is posted', async () => {
+  const url = `https://e.co/${'a'.repeat(2048 - 'https://e.co/'.length)}`
+  const fetchMock = mockServer([], (method, requested) => {
+    if (method === 'POST' && requested === '/api/documents/url') return Response.json(doc({ status: 'pending', source: url }), { status: 202 })
+  })
+  renderPanel()
+  await flush()
+  fireEvent.change(screen.getByLabelText('Or add a URL'), { target: { value: url } })
+  fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
+  await flush()
+  expect(requestsWith(fetchMock, 'POST')).toEqual(['/api/documents/url'])
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+test('an .htm file is accepted when html is an allowed upload type', async () => {
+  const fetchMock = mockServer([], (method, url) => {
+    if (method === 'POST' && url === LIST) return Response.json(doc({ status: 'pending', source: 'page.htm' }), { status: 202 })
+  })
+  renderPanel({ ...limits, upload_types: ['html'] })
+  await flush()
+  upload(new File(['<p>hi</p>'], 'page.htm', { type: 'text/html' }))
+  await flush()
+  expect(requestsWith(fetchMock, 'POST')).toEqual([LIST])
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+test('the file input accepts exactly the extensions of the allowed upload types', async () => {
+  mockServer([])
+  renderPanel({ ...limits, upload_types: ['html', 'pdf'] })
+  await flush()
+  expect(screen.getByLabelText('Upload a file')).toHaveAttribute('accept', '.html,.htm,.pdf')
+})
+
+test('a rejected Retry shows its detail in the panel alert and the item stays failed', async () => {
+  mockServer([doc({ status: 'failed', error: 'Could not parse the PDF.' })], (method, url) => {
+    if (method === 'POST' && url === `${LIST}/${UPLOAD_ID}/retry`) {
+      return Response.json({ code: 'document_busy', detail: 'This document is busy. Try again shortly.' }, { status: 409 })
+    }
+  })
+  renderPanel()
+  await flush()
+  const retry = screen.getByRole('button', { name: 'Retry notes.pdf' })
+  fireEvent.click(retry)
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('This document is busy. Try again shortly.')
+  await waitFor(() => expect(retry).toBeEnabled())
+  expect(screen.getByRole('listitem')).toHaveTextContent('failed')
+})
+
+test('a rejected Delete shows its detail in the panel alert and the document stays listed', async () => {
+  mockServer([doc()], (method, url) => {
+    if (method === 'DELETE' && url === `${LIST}/${UPLOAD_ID}`) {
+      return Response.json({ code: 'internal', detail: 'Could not delete the document.' }, { status: 500 })
+    }
+  })
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await flush()
+  fireEvent.click(screen.getByRole('button', { name: 'Delete notes.pdf' }))
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not delete the document.')
+  expect(screen.getByText('notes.pdf')).toBeInTheDocument()
+})
+
+test('a 429 with Retry-After 0 shows only the detail, because the API never sends 0', async () => {
+  // rate_limited() rounds up a positive wait, so Retry-After is at least 1 and errorMessage's truthy check is safe.
+  mockServer([], (method, url) => {
+    if (method === 'POST' && url === LIST) {
+      return Response.json({ code: 'rate_limited', detail: 'Too many uploads.' }, { status: 429, headers: { 'Retry-After': '0' } })
+    }
+  })
+  renderPanel()
+  await flush()
+  upload(new File(['hello'], 'notes.pdf'))
+
+  expect((await screen.findByRole('alert')).textContent).toBe('Too many uploads.')
 })

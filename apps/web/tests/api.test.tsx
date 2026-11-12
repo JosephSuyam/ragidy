@@ -232,3 +232,53 @@ test('a 429 on stream throws ApiError carrying retryAfter from Retry-After', asy
   expect(err).toBeInstanceOf(ApiError)
   expect(err).toMatchObject({ status: 429, code: 'rate_limited', retryAfter: 42 })
 })
+
+test.each([
+  [422, 'invalid_message', 'Message is not allowed.'],
+  [500, 'internal', 'Something broke.'],
+])('stream rejects with ApiError carrying code and detail on %i', async (status, code, detail) => {
+  const { api, ApiError, setSessionState } = await import('@/services/api')
+  setSessionState(open)
+  vi.stubGlobal('fetch', vi.fn(async () => json({ code, detail }, status)))
+
+  const err = await api.stream('/chats/1/messages', { content: 'q' }, new AbortController().signal).catch((e: unknown) => e)
+
+  expect(err).toBeInstanceOf(ApiError)
+  expect(err).toMatchObject({ status, code, detail })
+})
+
+test('a second session_expired on stream surfaces as ApiError after one /me refresh', async () => {
+  const { api, ApiError, setSessionState } = await import('@/services/api')
+  setSessionState(open)
+  const expired = () => json({ code: 'session_expired', detail: 'Session expired.' }, 401)
+  const fetchMock = vi.fn().mockResolvedValueOnce(expired()).mockResolvedValueOnce(json(open)).mockResolvedValueOnce(expired())
+  vi.stubGlobal('fetch', fetchMock)
+
+  const err = await api.stream('/chats/1/messages', { content: 'q' }, new AbortController().signal).catch((e: unknown) => e)
+
+  expect(err).toBeInstanceOf(ApiError)
+  expect(err).toMatchObject({ code: 'session_expired' })
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(['/api/chats/1/messages', '/api/me', '/api/chats/1/messages'])
+})
+
+test('a cookieless first-write stream that fails releases the gate, so a queued write goes out', async () => {
+  const { api, ApiError, setSessionState } = await import('@/services/api')
+  setSessionState(me(null))
+  const { pending } = deferredFetch()
+
+  const streamed = api.stream('/chats/1/messages', { content: 'q' }, new AbortController().signal)
+  const queued = api.post('/chats')
+  await tick()
+  expect(pending.map((p) => p.path)).toEqual(['/api/chats/1/messages'])
+
+  pending[0].resolve(json({ code: 'internal', detail: 'Stream failed.' }, 500))
+  await expect(streamed).rejects.toBeInstanceOf(ApiError)
+  await vi.waitFor(() => expect(pending).toHaveLength(2))
+  expect(pending[1].path).toBe('/api/chats')
+
+  pending[1].resolve(json({ id: 2 }, 201))
+  await vi.waitFor(() => expect(pending).toHaveLength(3))
+  expect(pending[2].path).toBe('/api/me')
+  pending[2].resolve(json(open))
+  await expect(queued).resolves.toEqual({ id: 2 })
+})
