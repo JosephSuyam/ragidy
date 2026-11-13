@@ -180,6 +180,11 @@ def test_unknown_provider_rejected(monkeypatch: pytest.MonkeyPatch, field: str, 
     assert value not in str(exc.value)
 
 
+def test_embed_provider_accepts_google(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMBED_PROVIDER", "google")
+    assert load().embed_provider == "google"
+
+
 def test_limits_map_per_tier_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     tier_env = {
         "UPLOAD_MAX_MB_GUEST": "2",
