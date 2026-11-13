@@ -81,7 +81,7 @@ function deferred<T>() {
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
 function renderPanel(chatLimits = limits) {
-  const session = { me: { ...user, limits: chatLimits }, sessionVersion: 0, refresh: async () => {} }
+  const session = { me: { ...user, limits: chatLimits }, sessionVersion: 0, refresh: async () => {}, guestExpired: false, dismissExpired: () => undefined }
   return render(
     <SessionContext.Provider value={session}>
       <ChatPanel />

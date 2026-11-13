@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import App from '@/App'
 import { api, clearSessionState } from '@/services/api'
@@ -26,6 +26,9 @@ function mockApi(post?: Response) {
 afterEach(() => {
   clearSessionState()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  localStorage.clear()
   history.replaceState(null, '', '/')
 })
 
@@ -344,4 +347,142 @@ test('visibility change with an unchanged owner does not remount', async () => {
   await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === '/api/me')).toHaveLength(2))
   await new Promise((r) => setTimeout(r))
   expect(screen.getByRole('region', { name: 'Documents' })).toBe(documents)
+})
+
+const EXPIRY_KEY = 'ragidy.guestExpiresAt'
+const EXPIRED_TEXT = 'Your guest session expired. Its documents and chats were deleted.'
+const PAST = '2001-01-01T00:00:00Z'
+const FUTURE = '2999-01-01T00:00:00Z'
+
+const guest = (guest_expires_at: string | null) => ({ ...me, guest_expires_at })
+
+const noticeRegion = () => screen.getByRole('status', { name: 'Notices' })
+
+function meCalls(fetchMock: ReturnType<typeof mockSession>) {
+  return fetchMock.mock.calls.filter(([url]) => url === '/api/me').length
+}
+
+async function renderHome(current: () => unknown) {
+  const fetchMock = mockSession(current)
+  render(<App />)
+  await screen.findByRole('region', { name: 'Documents' })
+  return fetchMock
+}
+
+test('a stored lapsed guest expiry shows the expired notice once and clears the key', async () => {
+  localStorage.setItem(EXPIRY_KEY, PAST)
+  await renderHome(() => guest(null))
+  expect(await screen.findByText(EXPIRED_TEXT)).toBeInTheDocument()
+  expect(screen.getAllByText(EXPIRED_TEXT)).toHaveLength(1)
+  expect(localStorage.getItem(EXPIRY_KEY)).toBeNull()
+})
+
+test('a stored future guest expiry with no new expiry shows no notice', async () => {
+  localStorage.setItem(EXPIRY_KEY, FUTURE)
+  await renderHome(() => guest(null))
+  expect(screen.queryByText(EXPIRED_TEXT)).not.toBeInTheDocument()
+})
+
+test('a user session clears the stored guest expiry and shows no notice', async () => {
+  localStorage.setItem(EXPIRY_KEY, PAST)
+  await renderHome(() => user)
+  expect(screen.queryByText(EXPIRED_TEXT)).not.toBeInTheDocument()
+  expect(localStorage.getItem(EXPIRY_KEY)).toBeNull()
+})
+
+test('a guest with an expiry stores it and shows no notice', async () => {
+  await renderHome(() => guest(FUTURE))
+  expect(localStorage.getItem(EXPIRY_KEY)).toBe(FUTURE)
+  expect(screen.queryByText(EXPIRED_TEXT)).not.toBeInTheDocument()
+})
+
+test('a visibility check after the stored guest expiry lapsed shows the notice', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2030-06-01T00:00:00Z'))
+  let current: unknown = guest('2030-06-01T12:00:00Z')
+  mockSession(() => current)
+  render(<App />)
+  await screen.findByRole('region', { name: 'Documents' })
+  expect(localStorage.getItem(EXPIRY_KEY)).toBe('2030-06-01T12:00:00Z')
+
+  vi.setSystemTime(new Date('2030-07-01T00:00:00Z'))
+  current = guest(null)
+  changeVisibility()
+  expect(await screen.findByText(EXPIRED_TEXT)).toBeInTheDocument()
+})
+
+test('a first write that gets a new guest expiry after the stored one lapsed shows the notice', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2030-06-01T00:00:00Z'))
+  const firstExpiry = '2030-06-01T00:10:00Z'
+  let wrote = false
+  mockSession(() => (wrote ? guest(FUTURE) : guest(firstExpiry)), () => ((wrote = true), Response.json({}, { status: 201 })))
+  render(<App />)
+  await screen.findByRole('region', { name: 'Documents' })
+  expect(localStorage.getItem(EXPIRY_KEY)).toBe(firstExpiry)
+  expect(noticeRegion()).not.toHaveTextContent(EXPIRED_TEXT)
+
+  vi.setSystemTime(new Date('2030-06-01T00:20:00Z'))
+  await api.post('/uploads')
+  await waitFor(() => expect(noticeRegion()).toHaveTextContent(EXPIRED_TEXT))
+  expect(localStorage.getItem(EXPIRY_KEY)).toBe(FUTURE)
+})
+
+test('dismissing the expired notice hides it, moves focus to the page, and a later check does not show it again', async () => {
+  localStorage.setItem(EXPIRY_KEY, PAST)
+  const fetchMock = await renderHome(() => guest(null))
+  fireEvent.click(await within(noticeRegion()).findByRole('button', { name: 'Dismiss' }))
+  expect(screen.queryByText(EXPIRED_TEXT)).not.toBeInTheDocument()
+
+  const page = document.activeElement
+  expect(page).not.toBe(document.body)
+  expect(page).toHaveAttribute('tabindex', '-1')
+  expect(page).toContainElement(screen.getByRole('region', { name: 'Chat' }))
+
+  const checks = meCalls(fetchMock)
+  changeVisibility()
+  await vi.waitFor(() => expect(meCalls(fetchMock)).toBe(checks + 1))
+  await new Promise((r) => setTimeout(r))
+  expect(noticeRegion()).not.toHaveTextContent(EXPIRED_TEXT)
+  expect(localStorage.getItem(EXPIRY_KEY)).toBeNull()
+})
+
+test('a null-expiry guest before the stored expiry lapsed keeps the key, then shows the notice once it lapses', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date('2030-06-01T00:00:00Z'))
+  const stored = '2030-06-01T00:02:00Z'
+  localStorage.setItem(EXPIRY_KEY, stored)
+  const fetchMock = await renderHome(() => guest(null))
+  expect(localStorage.getItem(EXPIRY_KEY)).toBe(stored)
+  expect(noticeRegion()).not.toHaveTextContent(EXPIRED_TEXT)
+
+  vi.setSystemTime(new Date('2030-06-01T00:05:00Z'))
+  const checks = meCalls(fetchMock)
+  changeVisibility()
+  await waitFor(() => expect(noticeRegion()).toHaveTextContent(EXPIRED_TEXT))
+  expect(meCalls(fetchMock)).toBe(checks + 1)
+  expect(localStorage.getItem(EXPIRY_KEY)).toBeNull()
+})
+
+test('the expired notice shows on the login page without alert role', async () => {
+  localStorage.setItem(EXPIRY_KEY, PAST)
+  mockSession(() => guest(null))
+  history.replaceState(null, '', '/login')
+  render(<App />)
+  await screen.findByLabelText('Email')
+  await waitFor(() => expect(noticeRegion()).toHaveTextContent(EXPIRED_TEXT))
+  expect(within(noticeRegion()).queryByRole('alert')).not.toBeInTheDocument()
+})
+
+test('unreadable storage renders the app without the notice', async () => {
+  localStorage.setItem(EXPIRY_KEY, PAST)
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new Error('storage denied')
+  })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('storage denied')
+  })
+  await renderHome(() => guest(null))
+  expect(screen.getByRole('region', { name: 'Chat' })).toBeInTheDocument()
+  expect(screen.queryByText(EXPIRED_TEXT)).not.toBeInTheDocument()
 })

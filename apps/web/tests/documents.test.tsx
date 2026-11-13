@@ -60,7 +60,7 @@ function requestsWith(fetchMock: ReturnType<typeof mockServer>, method: string) 
 }
 
 function renderPanel(docLimits = limits) {
-  const session = { me: { ...me, limits: docLimits }, sessionVersion: 0, refresh: async () => {} }
+  const session = { me: { ...me, limits: docLimits }, sessionVersion: 0, refresh: async () => {}, guestExpired: false, dismissExpired: () => undefined }
   return render(
     <SessionContext.Provider value={session}>
       <DocumentsPanel />
