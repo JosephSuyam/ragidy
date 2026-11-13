@@ -1148,13 +1148,13 @@ requests = [
 
 [[package]]
 name = "google-genai"
-version = "3.0.0"
+version = "2.34.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "distro" },
     { name = "google-auth", extra = ["requests"] },
-    { name = "httpx2" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "requests" },
     { name = "sniffio" },
@@ -1162,9 +1162,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/ed/f7ab2f658e832063cb9910fb540b7cf43b9eeefee89c98837d5aeee5a2bd/google_genai-3.0.0.tar.gz", hash = "sha256:f3e1a05a464a39cb6caf59a69824d3c54ef20dc5e403ff8fab1f4662cb18edf9", size = 818794, upload-time = "2026-11-06T02:29:07.929Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/22/89/4621aee9cb183efa5b8a187f0e315c49fddcfb8cd7f238b4a3bf4946dcd0/google_genai-2.34.0.tar.gz", hash = "sha256:8e182cf3f73384167b96861cf0aef5102b5070f2db1ea11002879e913806ef37", size = 791853, upload-time = "2026-10-29T06:43:23.706Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/fd/9f4050322c8e024fd7af77f67af97db858725e35988e0c61b31c1de4a4d0/google_genai-3.0.0-py3-none-any.whl", hash = "sha256:af56a7754312c3a4a562e100160d05b701d03d5f49101e6c85796694a789ae07", size = 1336765, upload-time = "2026-11-06T02:29:05.297Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/42/c24db865d9231b1c672ea26242a4dcf340e200bb1a9823dce4aa9c4c07a4/google_genai-2.34.0-py3-none-any.whl", hash = "sha256:a4cb02aebc4c357f863d2938132f0e3f7967fc5e00b8a4078673f68aad340665", size = 1258155, upload-time = "2026-10-29T06:43:21.121Z" },
 ]
 
 [[package]]
@@ -1953,6 +1953,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d8/70/fe1f0a92459c3692075875c1e09fc51494602daaeb71734045e1d9d815d3/llama_index_core-0.14.25.tar.gz", hash = "sha256:4ebfdc5317f0382501fa80262d7a7382715f80741cf41a7b11a52d4335e6f696", size = 11591384, upload-time = "2026-09-21T16:21:51.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/20/60be179aaba858981edbe18eab106ff485967a9d3b198f8c58496cad9e32/llama_index_core-0.14.25-py3-none-any.whl", hash = "sha256:caa7d9c5ac9b13dc33400cf8d5e92e689b6d1e4497eb9bfa50d6f52ca2eb22a1", size = 11928254, upload-time = "2026-09-21T16:21:48.626Z" },
+]
+
+[[package]]
+name = "llama-index-embeddings-google-genai"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-genai" },
+    { name = "llama-index-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/89/20/d614eaf53e5b2402c681f2805016fab127130ec4efd7625d8903e5cdb964/llama_index_embeddings_google_genai-0.6.0.tar.gz", hash = "sha256:e1b74c3b82ab7ba68bb7ac698345a1f383657987d1c8bc1f4c93c11e4c7ee59c", size = 5955, upload-time = "2026-08-29T15:35:31.668Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/5d/6cca75db5ed50ba0017d0a3315063e63e0973e67e9f70e0dd5775fe749ed/llama_index_embeddings_google_genai-0.6.0-py3-none-any.whl", hash = "sha256:20f50c92b66ef1353e77d0dd9516f248ea9bd49520858582c21e8a8d37e68c24", size = 5724, upload-time = "2026-08-29T15:35:30.898Z" },
 ]
 
 [[package]]
@@ -3354,6 +3367,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "llama-index-core" },
+    { name = "llama-index-embeddings-google-genai" },
     { name = "llama-index-embeddings-ollama" },
     { name = "llama-index-embeddings-openai" },
     { name = "pgvector" },
@@ -3387,6 +3401,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=1.7.4" },
     { name = "langgraph", specifier = ">=1.2.20" },
     { name = "llama-index-core", specifier = ">=0.14.25" },
+    { name = "llama-index-embeddings-google-genai", specifier = ">=0.6.0" },
     { name = "llama-index-embeddings-ollama", specifier = ">=0.10.0" },
     { name = "llama-index-embeddings-openai", specifier = ">=0.7.0" },
     { name = "pgvector", specifier = ">=0.5.1" },

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     llm_provider: Literal["anthropic", "openai", "ollama", "google", "groq"] = "anthropic"
     llm_model: str = "claude-sonnet-5-5"
-    embed_provider: Literal["openai", "ollama"] = "openai"
+    embed_provider: Literal["openai", "ollama", "google"] = "openai"
     embed_model: str = "text-embedding-3-small"
     anthropic_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
