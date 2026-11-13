@@ -1,12 +1,34 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { MeResponse } from '@shared/index'
 import { SessionContext } from '@/hooks/useSession'
-import { api, setSessionHandler, setSessionState } from '@/services/api'
+import { api, GUEST_EXPIRY_MARGIN_MS, setSessionHandler, setSessionState } from '@/services/api'
+
+const EXPIRY_KEY = 'ragidy.guestExpiresAt'
+
+// Returns true when a stored guest session has lapsed and was replaced or dropped.
+function trackGuestExpiry(next: MeResponse): boolean {
+  try {
+    const last = localStorage.getItem(EXPIRY_KEY)
+    const expired =
+      !!last &&
+      next.tier === 'guest' &&
+      next.guest_expires_at !== last &&
+      Date.parse(last) <= Date.now() + GUEST_EXPIRY_MARGIN_MS
+    if (next.tier === 'guest' && next.guest_expires_at) localStorage.setItem(EXPIRY_KEY, next.guest_expires_at)
+    // A null-expiry guest before the stored expiry lapsed (clock skew) may still be the expired one: keep the key.
+    else if (next.tier === 'user' || expired || !last) localStorage.removeItem(EXPIRY_KEY)
+    return expired
+  } catch {
+    return false
+  }
+}
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<MeResponse | null>(null)
   const [failed, setFailed] = useState(false)
   const [sessionVersion, setVersion] = useState(0)
+  const [guestExpired, setGuestExpired] = useState(false)
+  const dismissExpired = useCallback(() => setGuestExpired(false), [])
 
   const meRef = useRef(me)
   useLayoutEffect(() => {
@@ -16,6 +38,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const apply = useCallback((next: MeResponse, remount = true) => {
     setSessionState(next)
     setMe(next)
+    if (trackGuestExpiry(next)) setGuestExpired(true)
     if (remount) setVersion((v) => v + 1)
   }, [])
 
@@ -66,7 +89,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => setSessionHandler()
   }, [apply])
 
-  const value = useMemo(() => (me ? { me, sessionVersion, refresh: () => load() } : null), [me, sessionVersion, load])
+  const value = useMemo(
+    () => (me ? { me, sessionVersion, refresh: () => load(), guestExpired, dismissExpired } : null),
+    [me, sessionVersion, load, guestExpired, dismissExpired],
+  )
 
   if (failed)
     return (

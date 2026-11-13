@@ -22,7 +22,7 @@ let expiredRefresh: Promise<void> | null = null
 let onSessionChange: ((me: MeResponse, remount: boolean) => void) | undefined
 
 // The browser drops a guest cookie by its own clock: stop trusting it early to absorb client clock skew.
-const GUEST_EXPIRY_MARGIN_MS = 60_000
+export const GUEST_EXPIRY_MARGIN_MS = 60_000
 
 const hasSession = () => Date.now() < sessionExpiry
 

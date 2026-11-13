@@ -1,7 +1,13 @@
 import { createContext, useContext } from 'react'
 import type { MeResponse } from '@shared/index'
 
-export type Session = { me: MeResponse; sessionVersion: number; refresh: () => Promise<void> }
+export type Session = {
+  me: MeResponse
+  sessionVersion: number
+  refresh: () => Promise<void>
+  guestExpired: boolean
+  dismissExpired: () => void
+}
 
 export const SessionContext = createContext<Session | null>(null)
 
