@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ChatOut, MessageOut } from '@shared/index'
 import { Composer } from '@/components/chat/Composer'
 import { MessageList } from '@/components/chat/MessageList'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useSession } from '@/hooks/useSession'
-import { api, errorMessage } from '@/services/api'
+import { ApiError, api, errorMessage } from '@/services/api'
 import { readChatStream } from '@/services/sse'
 
 const TITLE_MAX_CHARS = 200
 const INTERRUPTED = 'The answer was interrupted. Try again.'
 
-export function ChatPanel() {
+const NEAR_BOTTOM_PX = 80
+
+export function ChatPanel({ hasReady = null }: { hasReady?: boolean | null }) {
   const { me } = useSession()
   const [chats, setChats] = useState<ChatOut[] | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
@@ -23,6 +25,11 @@ export function ChatPanel() {
   const listLoad = useRef<AbortController | null>(null)
   const messagesLoad = useRef<AbortController | null>(null)
   const stream = useRef<AbortController | null>(null)
+  const [deleting, setDeleting] = useState<ReadonlySet<string>>(new Set())
+  const scroller = useRef<HTMLDivElement | null>(null)
+  const nearBottom = useRef(true)
+  const selectedRef = useRef<string | null>(null)
+  const newChatButton = useRef<HTMLButtonElement | null>(null)
 
   const loadChats = useCallback(() => {
     listLoad.current?.abort()
@@ -58,11 +65,22 @@ export function ChatPanel() {
     setError(null)
   }
 
+  useLayoutEffect(() => {
+    selectedRef.current = selected
+  }, [selected])
+
+  // Instant jump (no smooth scroll) keeps reduced-motion users comfortable.
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (el && nearBottom.current) el.scrollTop = el.scrollHeight
+  }, [messages])
+
   const select = (id: string) => {
     if (id === selected) return
     cancelWork()
     setSelected(id)
     setMessages([])
+    nearBottom.current = true
     setLoadingMessages(true)
     const c = new AbortController()
     messagesLoad.current = c
@@ -86,10 +104,36 @@ export function ChatPanel() {
     setLoadingMessages(false)
   }
 
+  const remove = (chat: ChatOut, trigger: HTMLElement) => {
+    if (!window.confirm(`Delete ${chat.title ?? 'Untitled chat'}?`)) return
+    setDeleting((d) => new Set(d).add(chat.id))
+    const removed = () => {
+      setChats((list) => (list ?? []).filter((c) => c.id !== chat.id))
+      if (selectedRef.current === chat.id) newChat()
+      const active = document.activeElement
+      if (!active || active === document.body || active === trigger) newChatButton.current?.focus()
+    }
+    void api.delete(`/chats/${chat.id}`).then(
+      removed,
+      (err: unknown) => {
+        // Already deleted elsewhere: the row is gone either way.
+        if (err instanceof ApiError && err.status === 404) removed()
+        else setError(errorMessage(err))
+      },
+    ).finally(() =>
+      setDeleting((d) => {
+        const next = new Set(d)
+        next.delete(chat.id)
+        return next
+      }),
+    )
+  }
+
   const send = (content: string) => {
     cancelWork()
     const c = new AbortController()
     stream.current = c
+    nearBottom.current = true
     setStreaming(true)
     const before = messages
     setMessages([...before, { role: 'user', content, citations: [] }, { role: 'assistant', content: '', citations: [] }])
@@ -144,7 +188,7 @@ export function ChatPanel() {
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-sm font-medium">Chats</h2>
-          <Button type="button" size="sm" variant="outline" onClick={newChat}>
+          <Button ref={newChatButton} type="button" size="sm" variant="outline" onClick={newChat}>
             New chat
           </Button>
         </div>
@@ -165,9 +209,9 @@ export function ChatPanel() {
         ) : chats.length === 0 ? (
           <p className="text-sm text-muted-foreground">No chats yet. Ask a question to start one.</p>
         ) : (
-          <ul aria-label="Chat list" className="flex flex-wrap gap-2">
+          <ul aria-label="Chat list" className="flex max-h-32 flex-wrap gap-2 overflow-y-auto">
             {chats.map((chat) => (
-              <li key={chat.id}>
+              <li key={chat.id} className="flex items-center">
                 <Button
                   type="button"
                   size="sm"
@@ -177,6 +221,16 @@ export function ChatPanel() {
                   className="max-w-56"
                 >
                   <span className="truncate">{chat.title ?? 'Untitled chat'}</span>
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Delete ${chat.title ?? 'Untitled chat'}`}
+                  disabled={deleting.has(chat.id)}
+                  onClick={(e) => remove(chat, e.currentTarget)}
+                >
+                  Delete
                 </Button>
               </li>
             ))}
@@ -188,7 +242,14 @@ export function ChatPanel() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      <div className="flex-1">
+      <div
+        ref={scroller}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX
+        }}
+        className="min-h-0 flex-1 overflow-y-auto max-md:max-h-[60svh]"
+      >
         {loadingMessages ? (
           <p role="status">Loading messages…</p>
         ) : messages.length === 0 ? (
@@ -197,6 +258,11 @@ export function ChatPanel() {
           <MessageList messages={messages} streaming={streaming} />
         )}
       </div>
+      {hasReady === false && (
+        <p role="note" className="text-sm text-muted-foreground">
+          No ready documents yet. Upload a file or add a URL, then ask.
+        </p>
+      )}
       <Composer disabled={streaming || loadingMessages} hourlyLimit={me.limits.chat_messages_per_hour} onSend={send} />
     </div>
   )

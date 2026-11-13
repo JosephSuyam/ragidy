@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { DocumentOut } from '@shared/index'
 import { DocumentItem } from '@/components/documents/DocumentItem'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -9,13 +9,17 @@ import { api, errorMessage } from '@/services/api'
 
 const POLL_MS = 3000
 
-export function DocumentsPanel() {
+export function DocumentsPanel({ onLoaded }: { onLoaded?: (docs: DocumentOut[]) => void }) {
   const { me } = useSession()
   const [docs, setDocs] = useState<DocumentOut[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
   const inflight = useRef<AbortController | null>(null)
+  const onLoadedRef = useRef(onLoaded)
+  useLayoutEffect(() => {
+    onLoadedRef.current = onLoaded
+  }, [onLoaded])
 
   // One list request at a time: a newer load aborts the older, so a stale response never wins.
   const load = useCallback(() => {
@@ -30,6 +34,7 @@ export function DocumentsPanel() {
         settle()
         setError(null)
         setDocs(next)
+        onLoadedRef.current?.(next)
       },
       (err: unknown) => {
         settle()

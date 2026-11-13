@@ -80,11 +80,11 @@ function deferred<T>() {
 
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
 
-function renderPanel(chatLimits = limits) {
+function renderPanel(chatLimits = limits, hasReady?: boolean | null) {
   const session = { me: { ...user, limits: chatLimits }, sessionVersion: 0, refresh: async () => {}, guestExpired: false, dismissExpired: () => undefined }
   return render(
     <SessionContext.Provider value={session}>
-      <ChatPanel />
+      <ChatPanel hasReady={hasReady} />
     </SessionContext.Provider>,
   )
 }
@@ -111,6 +111,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearSessionState()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -118,7 +119,8 @@ test('the chat list loads from GET /api/chats', async () => {
   mockServer([ALPHA, BETA])
   renderPanel()
   const list = await screen.findByRole('list', { name: 'Chat list' })
-  expect(within(list).getAllByRole('button').map((b) => b.textContent)).toEqual(['Alpha', 'Beta'])
+  const chatButtons = within(list).getAllByRole('button', { name: (name) => !name.startsWith('Delete ') })
+  expect(chatButtons.map((b) => b.textContent)).toEqual(['Alpha', 'Beta'])
 })
 
 test('an empty chat list shows the empty state', async () => {
@@ -282,9 +284,10 @@ test('a 429 before the stream shows the retry hint and rolls back the optimistic
 })
 
 // Starts an answer in Alpha and returns its stream while it is still open.
-async function answerInFlight() {
+async function answerInFlight(handle: Handler = () => undefined) {
   const streams: Stream[] = []
-  mockServer([ALPHA, BETA], streamHandler(streams), { [ALPHA.id]: [], [BETA.id]: [] })
+  const stream = streamHandler(streams)
+  mockServer([ALPHA, BETA], (method, url, init) => handle(method, url, init) ?? stream(method, url, init), { [ALPHA.id]: [], [BETA.id]: [] })
   const ui = renderPanel()
   await selectChat('Alpha')
   ask('Q?')
@@ -671,4 +674,307 @@ test('unmounting while the create POST is pending sends no message', async () =>
   await flush()
 
   expect(requestsWith(fetchMock, 'POST')).toEqual([CHATS])
+})
+
+const NO_CONTENT = () => new Response(null, { status: 204 })
+const NOT_FOUND = () => Response.json({ code: 'not_found', detail: 'Chat not found.' }, { status: 404 })
+
+// Answers DELETE for one chat with what `respond` returns; other requests fall through to the default handler.
+function onDelete(id: string, respond: () => Response | Promise<Response>): Handler {
+  return (method, url) => (method === 'DELETE' && url === `${CHATS}/${id}` ? respond() : undefined)
+}
+
+test('declining the confirm sends no DELETE and leaves the list unchanged', async () => {
+  const fetchMock = mockServer([ALPHA, BETA])
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+  await flush()
+
+  expect(confirm).toHaveBeenCalledWith('Delete Alpha?')
+  expect(requestsWith(fetchMock, 'DELETE')).toEqual([])
+  expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
+})
+
+test('confirming sends DELETE for that chat and removes its row', async () => {
+  const fetchMock = mockServer([ALPHA, BETA], onDelete(ALPHA.id, NO_CONTENT))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument())
+
+  expect(requestsWith(fetchMock, 'DELETE')).toEqual([`${CHATS}/${ALPHA.id}`])
+  expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
+})
+
+test('deleting the selected chat clears the view, aborts its stream, and shows no error', async () => {
+  const { stream } = await answerInFlight(onDelete(ALPHA.id, NO_CONTENT))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+  await waitFor(() => expect(stream.signal.aborted).toBe(true))
+
+  expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument()
+  expect(screen.queryByText('Par')).not.toBeInTheDocument()
+  expect(screen.getByText('Ask a question about your documents.')).toBeInTheDocument()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+test('a second click while a delete is pending sends nothing, and only that row is disabled', async () => {
+  const pending = deferred<Response>()
+  const fetchMock = mockServer([ALPHA, BETA], onDelete(ALPHA.id, () => pending.promise))
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+  const remove = screen.getByRole('button', { name: 'Delete Alpha' })
+
+  fireEvent.click(remove)
+  fireEvent.click(remove)
+
+  expect(confirm).toHaveBeenCalledTimes(1)
+  expect(requestsWith(fetchMock, 'DELETE')).toEqual([`${CHATS}/${ALPHA.id}`])
+  expect(remove).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Delete Beta' })).toBeEnabled()
+
+  pending.resolve(NO_CONTENT())
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument())
+})
+
+test('a 404 on delete removes the row with no alert, since the chat is already gone', async () => {
+  mockServer([ALPHA, BETA], onDelete(ALPHA.id, NOT_FOUND))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument())
+
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'New chat' }))
+})
+
+test('a 404 on the selected chat clears the view and aborts its stream with no alert', async () => {
+  const { stream } = await answerInFlight(onDelete(ALPHA.id, NOT_FOUND))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument())
+
+  expect(stream.signal.aborted).toBe(true)
+  expect(screen.getByText('Ask a question about your documents.')).toBeInTheDocument()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+})
+
+test.each([
+  [500, 'Could not delete the chat.', {}, 'Could not delete the chat.'],
+  [429, 'Too many deletes.', { 'Retry-After': '30' }, 'Too many deletes. Try again in 30 seconds.'],
+])('a %i on delete shows the alert and keeps the row', async (status, detail, headers, message) => {
+  mockServer([ALPHA, BETA], onDelete(ALPHA.id, () => Response.json({ code: 'error', detail }, { status, headers })))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(message)
+  expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Delete Alpha' })).toBeEnabled()
+})
+
+test('deleting another chat leaves the selected stream running and its messages in place', async () => {
+  const { stream } = await answerInFlight(onDelete(BETA.id, NO_CONTENT))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Beta' }))
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Beta' })).not.toBeInTheDocument())
+
+  expect(stream.signal.aborted).toBe(false)
+  expect(bubble('You')).toBe('Q?')
+  expect(bubble('Assistant')).toBe('Par')
+  expect(screen.getByRole('button', { name: 'Alpha' })).toHaveAttribute('aria-current', 'true')
+  stream.push('token', { text: 'al' })
+  await waitFor(() => expect(bubble('Assistant')).toBe('Paral'))
+  stream.push('done', {})
+  stream.close()
+})
+
+test('a delete of the selected chat that resolves after another chat was selected keeps that chat', async () => {
+  const pending = deferred<Response>()
+  mockServer([ALPHA, BETA], onDelete(ALPHA.id, () => pending.promise), {
+    [ALPHA.id]: [],
+    [BETA.id]: [
+      { role: 'user', content: 'Beta question?', citations: [] },
+      { role: 'assistant', content: 'Beta answer.', citations: [] },
+    ],
+  })
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await selectChat('Alpha')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+  await selectChat('Beta')
+  pending.resolve(NO_CONTENT())
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument())
+  await flush()
+
+  expect(screen.getByRole('button', { name: 'Beta' })).toHaveAttribute('aria-current', 'true')
+  expect(screen.getByText('Beta question?')).toBeInTheDocument()
+  expect(bubble('Assistant')).toBe('Beta answer.')
+  expect(screen.queryByText('Ask a question about your documents.')).not.toBeInTheDocument()
+})
+
+test('after a delete succeeds, focus moves from the removed Delete button to New chat', async () => {
+  mockServer([ALPHA, BETA], onDelete(ALPHA.id, NO_CONTENT))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+  const remove = screen.getByRole('button', { name: 'Delete Alpha' })
+  remove.focus()
+
+  fireEvent.click(remove)
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument())
+
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'New chat' }))
+})
+
+test('a delete that resolves after focus moved elsewhere leaves focus where the user put it', async () => {
+  const pending = deferred<Response>()
+  mockServer([ALPHA, BETA], onDelete(ALPHA.id, () => pending.promise))
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderPanel()
+  await screen.findByRole('button', { name: 'Alpha' })
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Alpha' }))
+  const box = screen.getByLabelText('Message')
+  box.focus()
+
+  pending.resolve(NO_CONTENT())
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Alpha' })).not.toBeInTheDocument())
+
+  expect(document.activeElement).toBe(box)
+})
+
+test('a chat without a title has a Delete button named Delete Untitled chat', async () => {
+  mockServer([{ ...ALPHA, title: null }])
+  renderPanel()
+  expect(await screen.findByRole('button', { name: 'Delete Untitled chat' })).toBeEnabled()
+})
+
+type Geometry = { scrollHeight: number; clientHeight: number; scrollTop: number }
+
+// jsdom has no layout, so the scroller's metrics are plain values the test controls.
+function fakeLayout(el: HTMLElement, geometry: Geometry) {
+  for (const key of ['scrollHeight', 'clientHeight', 'scrollTop'] as const) {
+    Object.defineProperty(el, key, {
+      configurable: true,
+      get: () => geometry[key],
+      set: (v: number) => {
+        geometry[key] = v
+      },
+    })
+  }
+}
+
+// The message log sits directly inside the scroll container.
+const scroller = () => screen.getByRole('log', { name: 'Messages' }).parentElement as HTMLElement
+
+const EARLIER: MessageOut[] = [
+  { role: 'user', content: 'Earlier?', citations: [] },
+  { role: 'assistant', content: 'Earlier answer.', citations: [] },
+]
+
+test('near the bottom, a new token keeps the view at the bottom', async () => {
+  const streams: Stream[] = []
+  mockServer([ALPHA], streamHandler(streams), { [ALPHA.id]: EARLIER })
+  renderPanel()
+  await selectChat('Alpha')
+  ask('Q?')
+  await waitFor(() => expect(streams).toHaveLength(1))
+
+  const el = scroller()
+  const geometry = { scrollHeight: 1000, clientHeight: 400, scrollTop: 600 }
+  fakeLayout(el, geometry)
+  fireEvent.scroll(el)
+  geometry.scrollHeight = 1200
+  streams[0].push('token', { text: 'Hi' })
+
+  expect(await screen.findByText('Hi')).toBeInTheDocument()
+  expect(geometry.scrollTop).toBe(1200)
+  streams[0].push('done', {})
+  streams[0].close()
+})
+
+test('after scrolling away from the bottom, a new token leaves the scroll position alone', async () => {
+  const streams: Stream[] = []
+  mockServer([ALPHA], streamHandler(streams), { [ALPHA.id]: EARLIER })
+  renderPanel()
+  await selectChat('Alpha')
+  ask('Q?')
+  await waitFor(() => expect(streams).toHaveLength(1))
+
+  const el = scroller()
+  const geometry = { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 }
+  fakeLayout(el, geometry)
+  fireEvent.scroll(el)
+  geometry.scrollHeight = 1200
+  streams[0].push('token', { text: 'Hi' })
+
+  expect(await screen.findByText('Hi')).toBeInTheDocument()
+  expect(geometry.scrollTop).toBe(0)
+  streams[0].push('done', {})
+  streams[0].close()
+})
+
+test('sending jumps to the bottom even after the reader scrolled away', async () => {
+  const streams: Stream[] = []
+  mockServer([ALPHA], streamHandler(streams), { [ALPHA.id]: EARLIER })
+  renderPanel()
+  await selectChat('Alpha')
+
+  const el = scroller()
+  const geometry = { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 }
+  fakeLayout(el, geometry)
+  fireEvent.scroll(el)
+  ask('Q?')
+
+  await waitFor(() => expect(streams).toHaveLength(1))
+  expect(geometry.scrollTop).toBe(1000)
+  streams[0].push('done', {})
+  streams[0].close()
+})
+
+test('opening a chat jumps to the bottom even after the reader scrolled away', async () => {
+  mockServer([ALPHA, BETA], undefined, { [ALPHA.id]: EARLIER, [BETA.id]: EARLIER })
+  renderPanel()
+  await selectChat('Alpha')
+
+  const el = scroller()
+  const geometry = { scrollHeight: 1000, clientHeight: 400, scrollTop: 0 }
+  fakeLayout(el, geometry)
+  fireEvent.scroll(el)
+  fireEvent.click(screen.getByRole('button', { name: 'Beta' }))
+
+  await waitFor(() => expect(screen.getByText('Earlier answer.')).toBeInTheDocument())
+  expect(geometry.scrollTop).toBe(1000)
+})
+
+test.each([[true], [null], [undefined]])('the no-ready note stays hidden when hasReady is %s', async (hasReady) => {
+  mockServer([ALPHA])
+  renderPanel(limits, hasReady)
+  await screen.findByRole('button', { name: 'Alpha' })
+  expect(screen.queryByRole('note')).not.toBeInTheDocument()
+})
+
+test('with no ready documents the note shows and Send is still enabled once there is text', async () => {
+  mockServer([ALPHA])
+  renderPanel(limits, false)
+
+  expect(await screen.findByRole('note')).toHaveTextContent('No ready documents yet. Upload a file or add a URL, then ask.')
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Hi' } })
+  expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled()
 })
