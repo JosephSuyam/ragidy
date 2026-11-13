@@ -8,7 +8,7 @@ function Content() {
   const { sessionVersion, guestExpired, dismissExpired } = useSession()
   const pageRef = useRef<HTMLDivElement>(null)
   return (
-    <>
+    <div className="flex min-h-svh flex-col md:h-svh">
       <ExpiredNotice
         expired={guestExpired}
         onDismiss={() => {
@@ -16,10 +16,10 @@ function Content() {
           pageRef.current?.focus()
         }}
       />
-      <div ref={pageRef} tabIndex={-1} className="outline-none">
+      <div ref={pageRef} tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
         <Router key={sessionVersion} />
       </div>
-    </>
+    </div>
   )
 }
 

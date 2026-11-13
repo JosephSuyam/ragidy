@@ -59,11 +59,11 @@ function requestsWith(fetchMock: ReturnType<typeof mockServer>, method: string) 
   return fetchMock.mock.calls.filter(([, init]) => (init?.method ?? 'GET') === method).map(([url]) => url)
 }
 
-function renderPanel(docLimits = limits) {
+function renderPanel(docLimits = limits, onLoaded?: (docs: DocumentOut[]) => void) {
   const session = { me: { ...me, limits: docLimits }, sessionVersion: 0, refresh: async () => {}, guestExpired: false, dismissExpired: () => undefined }
   return render(
     <SessionContext.Provider value={session}>
-      <DocumentsPanel />
+      <DocumentsPanel onLoaded={onLoaded} />
     </SessionContext.Provider>,
   )
 }
@@ -503,4 +503,12 @@ test('a 429 with Retry-After 0 shows only the detail, because the API never send
   upload(new File(['hello'], 'notes.pdf'))
 
   expect((await screen.findByRole('alert')).textContent).toBe('Too many uploads.')
+})
+
+test('onLoaded receives the documents from a successful list load', async () => {
+  const onLoaded = vi.fn()
+  mockServer([doc()])
+  renderPanel(limits, onLoaded)
+  await flush()
+  expect(onLoaded).toHaveBeenCalledWith([doc()])
 })
