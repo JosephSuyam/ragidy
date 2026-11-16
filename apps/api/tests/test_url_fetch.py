@@ -173,3 +173,29 @@ def test_timeout_fails(http_server: str, monkeypatch: pytest.MonkeyPatch) -> Non
     started = time.monotonic()
     assert fetch_error(f"{http_server}/slow") == FAILED
     assert time.monotonic() - started < 1.5  # the server answers after 2 s
+
+
+@pytest.mark.usefixtures("allow_loopback")
+def test_deadline_covers_the_whole_redirect_chain(
+    http_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Each hop takes 0.2 s: one hop fits the 0.5 s deadline, three hops (0.6 s) do not.
+    # Two redirects stay under _MAX_REDIRECTS, so only the deadline can fail this fetch.
+    monkeypatch.setenv("URL_FETCH_TIMEOUT_SECONDS", "0.5")
+    assert fetch(f"{http_server}/slowhop/0") == (b"done", f"{http_server}/slowhop/0")
+    with pytest.raises(AppError) as info:
+        fetch(f"{http_server}/slowhop/2")
+    assert (info.value.status, info.value.code) == FAILED
+    assert isinstance(info.value.__cause__, TimeoutError)
+
+
+@pytest.mark.usefixtures("allow_loopback")
+def test_proxy_env_vars_are_ignored(http_server: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A proxy on a closed port would fail every request if httpx honored these variables.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+        monkeypatch.setenv(name.lower(), "http://127.0.0.1:9")
+    # A host NO_PROXY=* would bypass the proxy and make the test pass without proving anything.
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    assert fetch(f"{http_server}/bytes/3") == (b"aaa", f"{http_server}/bytes/3")

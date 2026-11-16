@@ -1,6 +1,14 @@
+from pathlib import Path
+
 import pytest
 from conftest import app_client, no_db
+from conftest import test_router as router
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from starlette.middleware import Middleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from app.core.config import get_settings
 from app.services import rate_limit
 from app.services.rate_limit import SlidingWindow, ip_key
 
@@ -81,3 +89,36 @@ def test_spoofed_forwarded_for_from_untrusted_peer_does_not_change_key(peer: str
     with app_client(no_db, client=(peer, 1)) as client:
         response = client.get("/_test/ip", headers={"X-Forwarded-For": "9.9.9.9"})
     assert response.json() == {"key": peer}
+
+
+def main_proxy_headers() -> Middleware:
+    """The ProxyHeadersMiddleware entry app.main registers."""
+    from app.main import app
+
+    entries = [m for m in app.user_middleware if m.cls is ProxyHeadersMiddleware]
+    assert len(entries) == 1, "app.main must add ProxyHeadersMiddleware exactly once"
+    return entries[0]
+
+
+def test_forwarded_for_counts_only_from_a_trusted_proxy(app_env: None) -> None:
+    # app.main reads settings at import, so this checks its value against the clean defaults.
+    entry = main_proxy_headers()
+    assert entry.kwargs["trusted_hosts"] == get_settings().trusted_proxies
+
+    # The middleware class from app.main, with a trusted range given directly.
+    app = FastAPI()
+    app.include_router(router)
+    app.add_middleware(entry.cls, trusted_hosts=["10.0.0.0/8"])
+    forwarded = {"X-Forwarded-For": "9.9.9.9"}
+    with TestClient(app, client=("10.1.2.3", 1)) as trusted:
+        assert trusted.get("/_test/ip", headers=forwarded).json() == {"key": "9.9.9.9"}
+    with TestClient(app, client=("203.0.113.5", 1)) as untrusted:
+        assert untrusted.get("/_test/ip", headers=forwarded).json() == {"key": "203.0.113.5"}
+
+
+def test_api_image_runs_with_no_proxy_headers() -> None:
+    # uvicorn trusts 127.0.0.1 for forwarded headers unless this flag is set.
+    dockerfile = Path(__file__).resolve().parents[3] / "infrastructure/docker/api.Dockerfile"
+    lines = dockerfile.read_text(encoding="utf-8").splitlines()
+    cmd = [line for line in lines if line.startswith("CMD")]
+    assert len(cmd) == 1 and "--no-proxy-headers" in cmd[0]

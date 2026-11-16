@@ -3,7 +3,20 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest
-from conftest import EMAIL, PASSWORD, app_client, count, register, set_cookies, write
+from conftest import (
+    EMAIL,
+    PASSWORD,
+    Sessions,
+    add_ready_document,
+    app_client,
+    axis,
+    count,
+    register,
+    row,
+    set_cookies,
+    stored_chunks,
+    write,
+)
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import Engine, text
@@ -92,9 +105,14 @@ def test_login_and_register_migrate_guest_rows(
     assert client.get("/me").json()["document_count"] == 2
 
 
+def upload(client: TestClient) -> Response:
+    return client.post("/documents", files={"file": ("a.txt", b"more", "text/plain")})
+
+
 def test_migration_ignores_user_cap(
     db_override: Callable[[], AsyncIterator[Any]],
     db_engine: Engine,
+    fake_storage: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MAX_DOCS_USER", "1")
@@ -105,8 +123,39 @@ def test_migration_ignores_user_cap(
 
         assert post_auth(client, "login").status_code == 200
         me = client.get("/me").json()
-    assert (me["document_count"], me["limits"]["max_docs"]) == (3, 1)
-    assert owned(db_engine, user_owner)[0] == user_docs | guest_docs
+        rejected = upload(client)
+        assert (me["document_count"], me["limits"]["max_docs"]) == (3, 1)
+        assert owned(db_engine, user_owner)[0] == user_docs | guest_docs
+        assert (rejected.status_code, rejected.json()["code"]) == (409, "document_limit_reached")
+        assert fake_storage == {}
+
+        # Deleting until under the cap lifts the 409: one document still at the cap.
+        docs = sorted(user_docs | guest_docs, key=str)
+        for doc in docs[:-1]:
+            assert client.delete(f"/documents/{doc}").status_code == 204
+        assert upload(client).status_code == 409
+        assert client.delete(f"/documents/{docs[-1]}").status_code == 204
+        assert upload(client).status_code == 202
+    assert len(fake_storage) == 1
+
+
+def test_migration_keeps_document_id_status_and_vectors(
+    client: TestClient,
+    db_engine: Engine,
+    db_sessions: Sessions,
+    fake_storage: dict[str, Any],
+) -> None:
+    guest_owner = uuid.UUID(write(client).json()["owner_id"])
+    doc = add_ready_document(db_engine, db_sessions, guest_owner, {"alpha": axis(0)})
+    fake_storage[f"documents/{doc}"] = (b"raw", "text/plain")
+    before = (row(db_engine, doc)[:4], stored_chunks(db_engine, doc))
+
+    register(client)
+    with db_engine.connect() as conn:
+        user_owner = conn.execute(text("SELECT owner_id FROM users")).scalar_one()
+    assert owned(db_engine, user_owner)[0] == {doc}
+    assert (row(db_engine, doc)[:4], stored_chunks(db_engine, doc)) == before
+    assert fake_storage[f"documents/{doc}"] == (b"raw", "text/plain")
 
 
 @pytest.mark.parametrize("when", ["before_request", "during_request"])

@@ -12,10 +12,13 @@ from conftest import (
     add_document,
     add_owner,
     count,
+    register,
     row,
     run,
     stored_chunks,
+    write,
 )
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
 from app.core import providers
@@ -76,6 +79,20 @@ def test_success_stores_chunks_and_marks_ready(db_engine: Engine, fake_storage: 
     assert len(chunks) > 1
     assert [c[0] for c in chunks] == list(range(len(chunks)))
     assert all(c[2] == {"source": "s", "page": None} for c in chunks)
+
+
+@pytest.mark.usefixtures("worker_db", "mock_embeddings")
+def test_pending_document_migrated_at_sign_in_reaches_ready(
+    client: TestClient, db_engine: Engine, fake_storage: Objects
+) -> None:
+    guest = UUID(write(client).json()["owner_id"])
+    id = add_document(db_engine, guest)
+    fake_storage[f"documents/{id}"] = (TEXT.encode(), "text/plain")
+    register(client)
+
+    assert run(ingestion.run_once()) is True
+
+    assert row(db_engine, id)[:4] == ("ready", 1, None, EMBED_MODEL)
 
 
 @pytest.mark.parametrize(
