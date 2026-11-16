@@ -35,7 +35,7 @@ apps/web/src/
   features/          chat/, upload/, sources/, workspaces/, authentication/
   routes/ services/ (API client) hooks/ types/ lib/
 apps/web/tests/
-packages/shared-types/   TypeScript types that mirror the API schemas
+packages/shared-types/   TypeScript types generated from the API's OpenAPI schema (ADR 0010)
 infrastructure/          docker/ (Dockerfiles, compose), database/ (init SQL), scripts/ (check.py)
 tests/                   integration/, e2e/, fixtures/ (cross-app)
 docs/                    architecture/, api/, development/, decisions/ (ADRs), sessions/
@@ -46,16 +46,19 @@ Empty folders hold a placeholder (`__init__.py` or `.gitkeep`) until their first
 ```bash
 make install        # uv sync + npm install
 make db             # Postgres + pgvector on :5432
-make s3             # SeaweedFS S3 on :8333; needs S3_* in apps/api/.env
+make s3             # SeaweedFS S3 on :8333; needs S3_* in .env
 make migrate        # apply Alembic migrations; needs make db
 make api            # API on :8000 (reload)
 make worker         # ingestion worker; needs make db, make s3, make migrate
 make web            # web on :5173
 make check          # full quality gate; `make fast` skips integration tests
-make up             # full stack from production images; needs S3_* in apps/api/.env
+make types          # regenerate packages/shared-types (openapi.json, api.d.ts) from the API schema
+make up             # full stack from production images; needs S3_* in .env
+make e2e            # e2e test on the full stack with an Ollama stub on host :11435; needs S3_* in .env
 ```
 Without `make`, run the commands in `Makefile` directly. The gate is `python infrastructure/scripts/check.py [--api|--web] [--fast]`.
 Code navigation: when `graphify-out/graph.json` exists, run `graphify query "<question>"` (or `path`, `explain`) before grepping or reading source, and `graphify update .` after code changes.
+After any API schema change (routes, request or response models), run `make types` and commit `packages/shared-types/openapi.json` and `api.d.ts`; `apps/api/tests/test_openapi_snapshot.py` fails the gate on drift (ADR 0010).
 Add dependencies with `uv add` (in `apps/api`) or `npm install` (in `apps/web`).
 
 ## Conventions

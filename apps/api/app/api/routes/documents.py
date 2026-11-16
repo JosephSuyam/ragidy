@@ -28,6 +28,11 @@ async def get_document(id: UUID, db: DbSession, owner: ReadOwner) -> DocumentOut
     return DocumentOut.model_validate(await documents.get_owner_document(db, owner, id))
 
 
+@router.delete("/{id}", status_code=204)
+async def delete_document(id: UUID, db: DbSession, owner: ReadOwner) -> None:
+    await documents.delete_owner_document(db, owner, id)
+
+
 @router.post("/{id}/retry", status_code=202)
 async def retry_document(id: UUID, db: DbSession, owner: ReadOwner) -> DocumentOut:
     return DocumentOut.model_validate(await documents.retry_document(db, owner, id))

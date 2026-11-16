@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.documents import Document
@@ -54,3 +54,16 @@ async def requeue_for_owner(db: AsyncSession, owner_id: UUID, id: UUID) -> Docum
         .returning(Document)
     )
     return await db.scalar(stmt)
+
+
+async def delete_document(db: AsyncSession, owner_id: UUID, id: UUID) -> bool:
+    """Delete a document and its chunks (cascade); flush only, the caller commits.
+
+    Returns False, deleting nothing, when it is missing, not the owner's, or processing.
+    """
+    stmt = (
+        delete(Document)
+        .where(Document.id == id, Document.owner_id == owner_id, Document.status != "processing")
+        .returning(Document.id)
+    )
+    return await db.scalar(stmt) is not None

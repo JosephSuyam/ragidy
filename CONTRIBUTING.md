@@ -1,7 +1,7 @@
 # Contributing
 
 ## Setup
-Follow `README.md`: copy `.env.example` to `apps/api/.env`, then run `make install`, `make db`, `make migrate`, and `make s3`.
+Follow `README.md`: copy `.env.example` to `.env`, then run `make install`, `make db`, `make migrate`, and `make s3`.
 
 Optional, for coding agents: install graphify (`uv tool install graphifyy`), then run `graphify update .` to build the code graph in `graphify-out/` (gitignored) and `graphify hook install` to rebuild it on each commit.
 
@@ -10,6 +10,7 @@ Optional, for coding agents: install graphify (`uv tool install graphifyy`), the
 2. Branch from an up-to-date `develop`: `git switch develop && git pull && git switch -c <type>/<short-name>`.
 3. Make the change. Add a test for each behavior.
 4. Run `make check`. It must pass.
+   - For a change that touches the full flow, also run `make e2e` (`tests/e2e`; skipped by the gate unless `E2E_BASE_URL` is set). It needs `S3_*` in `.env`, brings up the full app stack, and uses an Ollama stub on host port 11435, so no real provider key is used. `make e2e` stops the app services itself afterwards. Do not run `make api` or `make worker` during `make e2e`: they share the dev db, a dev worker would embed the e2e upload with the real provider, and the e2e worker would lose the advisory lock. CI runs the same test in the `e2e` job on push.
 5. Commit as `<type>(<scope>): <subject>`:
    - type: feature, fix, docs, style, refactor, test, chore, or perf
    - subject: imperative mood, 50 characters or fewer, no period

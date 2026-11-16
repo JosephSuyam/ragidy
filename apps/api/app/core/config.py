@@ -35,14 +35,18 @@ def _split_csv(value: Any) -> list[str]:
 
 class Settings(BaseSettings):
     # Errors hide input so str(exc) never leaks secrets; exc.errors() still has it: never log that.
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
+    model_config = SettingsConfigDict(
+        env_file="../../.env", extra="ignore", hide_input_in_errors=True
+    )
 
-    llm_provider: Literal["anthropic", "openai", "ollama"] = "anthropic"
+    llm_provider: Literal["anthropic", "openai", "ollama", "google", "groq"] = "anthropic"
     llm_model: str = "claude-sonnet-5-5"
-    embed_provider: Literal["openai", "ollama"] = "openai"
+    embed_provider: Literal["openai", "ollama", "google"] = "openai"
     embed_model: str = "text-embedding-3-small"
     anthropic_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
+    google_api_key: SecretStr = SecretStr("")
+    groq_api_key: SecretStr = SecretStr("")
     ollama_base_url: str = "http://localhost:11434"
     database_url: str = "postgresql+psycopg://ragidy:ragidy@localhost:5432/ragidy"
     s3_endpoint_url: str = "http://localhost:8333"

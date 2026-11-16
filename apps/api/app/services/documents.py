@@ -1,8 +1,10 @@
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
+from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import storage
@@ -12,6 +14,7 @@ from app.core.filetypes import MIME_TYPES, detect_type
 from app.models.documents import Document
 from app.repositories.documents import (
     count_documents,
+    delete_document,
     get_document,
     insert_document,
     list_documents,
@@ -20,6 +23,8 @@ from app.repositories.documents import (
 from app.services.owners import CurrentOwner, lock_write_owner
 from app.services.rate_limit import document_retries, rate_limited, url_fetches
 from app.services.url_fetch import fetch_url
+
+logger = logging.getLogger(__name__)
 
 
 def upload_limits(owner: CurrentOwner | None) -> tuple[TierLimits, int]:
@@ -119,9 +124,34 @@ async def retry_document(db: AsyncSession, owner: CurrentOwner | None, id: UUID)
     doc = await requeue_for_owner(db, owner.owner_id, id)
     if doc is None:
         await get_owner_document(db, owner, id)
-        raise AppError(409, "document_busy", "The document is already queued or processing")
+        raise _busy()
     await db.commit()
     return doc
+
+
+async def delete_owner_document(db: AsyncSession, owner: CurrentOwner | None, id: UUID) -> None:
+    """Delete the object, then the row (ADR 0009); 404 unknown, 409 processing, 503 S3 failed."""
+    if owner is None:
+        raise _not_found()
+    if (await get_owner_document(db, owner, id)).status == "processing":
+        raise _busy()
+    await db.commit()  # no transaction open during the S3 call
+    try:
+        await storage.delete_object(storage.document_key(id))
+    except (BotoCoreError, ClientError) as exc:
+        logger.warning("Object delete failed for document %s: %s", id, type(exc).__name__)
+        raise AppError(
+            503, "storage_unavailable", "Storage is unavailable; try again later"
+        ) from exc
+    if not await delete_document(db, owner.owner_id, id):
+        if (await get_owner_document(db, owner, id)).status == "processing":
+            raise _busy()
+        raise _not_found()
+    await db.commit()
+
+
+def _busy() -> AppError:
+    return AppError(409, "document_busy", "The document is already queued or processing")
 
 
 def _not_found() -> AppError:

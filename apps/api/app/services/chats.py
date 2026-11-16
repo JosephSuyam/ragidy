@@ -12,6 +12,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.models.documents import Chat, Message
 from app.repositories.chats import (
+    delete_chat,
     get_chat,
     insert_assistant_message,
     insert_chat,
@@ -57,6 +58,13 @@ async def list_chat_messages(
     """The chat's messages, oldest first; 404 when it is unknown, another owner's, or no owner."""
     owner = await _chat_owner(db, owner, chat_id)
     return await list_messages(db, owner.owner_id, chat_id)
+
+
+async def delete_owner_chat(db: AsyncSession, owner: CurrentOwner | None, chat_id: UUID) -> None:
+    """Delete the chat; messages cascade (ADR 0009). 404 when unknown, foreign, or no owner."""
+    if owner is None or not await delete_chat(db, owner.owner_id, chat_id):
+        raise _not_found()
+    await db.commit()
 
 
 async def post_user_message(

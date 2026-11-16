@@ -46,8 +46,8 @@ More diagrams: [diagrams.md](diagrams.md).
 
 ## Providers
 `app/core/providers.py` builds the models from `Settings` (`LLM_PROVIDER`/`LLM_MODEL`, `EMBED_PROVIDER`/`EMBED_MODEL`) ([ADR 0004](../decisions/0004-provider-factory.md)):
-- `get_chat_model(settings) -> BaseChatModel`: `anthropic`, `openai` or `ollama`.
-- `get_embed_model(settings) -> BaseEmbedding`: `openai` or `ollama`.
+- `get_chat_model(settings) -> BaseChatModel`: `anthropic`, `openai`, `ollama`, `google` (Google AI Studio, not Vertex AI) or `groq`.
+- `get_embed_model(settings) -> BaseEmbedding`: `openai`, `ollama` or `google` (Google AI Studio via `GOOGLE_API_KEY`, not Vertex AI). A `groq` chat model has no embeddings and needs one of these.
 
 It returns plain models, not wrapped, so agents can call `.with_structured_output` or `.bind_tools`. A missing API key raises `ValueError` naming the setting, never its value. Callers use `providers.get_chat_model(settings)` through the module, so tests mock models here.
 
@@ -58,7 +58,7 @@ It returns plain models, not wrapped, so agents can call `.with_structured_outpu
 ## Runtime self-healing rules
 Every piece of app code must follow these rules.
 
-1. **Retry transient failures.** `app/core/providers.py` sets the SDKs' built-in retries and a 60 s timeout: chat models get `max_retries=2` (3 attempts in total), and the OpenAI embedding gets `EMBED_MAX_RETRIES = 1` (at most 2 requests, because LlamaIndex applies it twice). They retry connection errors, 408, 409, 429 and 5xx, never other 4xx. Do not add `.with_retry` on top: it retries every exception by default and stacks on the SDK retries. Ollama runs locally and has no retry.
+1. **Retry transient failures.** `app/core/providers.py` sets the SDKs' built-in retries and a 60 s timeout: chat models get `max_retries=2` (3 attempts in total), and the OpenAI embedding gets `EMBED_MAX_RETRIES = 1` (at most 2 requests, because LlamaIndex applies it twice). They retry connection errors, 408, 409, 429 and 5xx, never other 4xx. Google embeddings are narrower: 2 total attempts on 429, 502, 503, 504 and connection errors only ([ADR 0004](../decisions/0004-provider-factory.md), 2026-11-14 amendment). Do not add `.with_retry` on top: it retries every exception by default and stacks on the SDK retries. Ollama runs locally and has no retry.
 2. **Fall back across providers.** When a second provider is configured, build the chat model as `primary.with_fallbacks([secondary])`.
 3. **Corrective RAG.** The LangGraph flow is `retrieve → grade_chunks → (generate | rewrite_query → retrieve)` ([ADR 0007](../decisions/0007-retrieval-and-corrective-rag.md)).
    - The grader keeps the relevant chunks in one structured call; the kept chunks are the citations.
@@ -67,6 +67,7 @@ Every piece of app code must follow these rules.
 4. **Grounded answers only.** Every answer cites the chunks it used. When retrieval returns nothing, say so; never answer from model memory.
 5. **Ingestion status.** Each document moves through `pending → processing → ready | failed` and stores an `error` field.
    - One worker process runs the jobs: `make worker` (`python -m app.workers.ingestion`), or the compose `worker` service. It takes a Postgres advisory lock at startup and exits if another worker holds it. When the database drops, it reconnects and takes the lock again before it claims another job ([ADR 0006](../decisions/0006-vector-store.md)).
+   - The same worker also purges expired guests and sessions at startup and then every 15 minutes, deleting each guest's objects, documents, chats and owner row in one transaction ([ADR 0009](../decisions/0009-deletion-and-purge.md)).
    - Provider, object storage and timeout errors get 3 attempts in total, with a backoff of 30 s, then 2 min. After a failure, the row goes back to `pending` while `attempts < 3`, and becomes `failed` with its error after that.
    - An `IngestionError` (unusable input, such as an unreadable or password-protected file, or no readable text) sets `failed` at once, with no retry.
    - Each job runs under a 600 s timeout, which counts as a failed attempt.

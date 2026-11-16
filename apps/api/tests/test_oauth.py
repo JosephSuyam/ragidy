@@ -12,6 +12,9 @@ from conftest import (
     EMAIL,
     ORIGIN,
     PASSWORD,
+    Sessions,
+    add_chat_with_message,
+    add_document,
     after_barrier,
     app_client,
     concurrent_requests,
@@ -501,6 +504,24 @@ def test_link_verified_email_clears_password_and_sessions(
     client.cookies.clear()
     login = client.post("/auth/login", json={"email": EMAIL, "password": PASSWORD})
     assert login.status_code == 401
+
+
+@pytest.mark.integration
+def test_link_keeps_documents_and_chats_added_before_linking(
+    client: TestClient, db_engine: Engine, db_sessions: Sessions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register(client)
+    client.cookies.clear()
+    with db_engine.connect() as conn:
+        user_owner = conn.execute(text("SELECT owner_id FROM users")).scalar_one()
+    doc = add_document(db_engine, user_owner)
+    chat = add_chat_with_message(db_sessions, user_owner)
+
+    github_http(monkeypatch, email="ALICE@example.com")
+    sign_in(client)
+
+    assert [d["id"] for d in client.get("/documents").json()] == [str(doc)]
+    assert [c["id"] for c in client.get("/chats").json()] == [str(chat)]
 
 
 @pytest.mark.integration

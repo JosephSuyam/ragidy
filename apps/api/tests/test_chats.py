@@ -18,6 +18,7 @@ from conftest import (
     app_client,
     axis,
     count,
+    in_session,
     register,
     run,
     set_cookies,
@@ -32,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.workflows import NOT_FOUND_ANSWER
 from app.api.deps import GUEST_COOKIE
 from app.core.config import get_settings
+from app.repositories.chats import insert_assistant_message, insert_user_message
 from app.services import chats
 from app.services.chats import ANSWER_FAILED
 
@@ -569,21 +571,25 @@ def test_question_and_answer_never_logged_while_streaming(
     assert ANSWER not in logged
 
 
-def post_then_disconnect(client: TestClient, chat_id: str) -> bytes:
-    """POST QUESTION to `chat_id` as raw ASGI and disconnect after the first token event.
+def post_then_disconnect(
+    client: TestClient, chat_id: str, gate: asyncio.Event | None = None
+) -> bytes:
+    """POST QUESTION to `chat_id` as raw ASGI and disconnect once `gate` is set.
 
-    TestClient and httpx's ASGITransport only report a disconnect once the response is done.
+    `gate` defaults to the first token event. TestClient and httpx's ASGITransport only report
+    a disconnect once the response is done.
     """
     from app.main import app
 
     first_token = asyncio.Event()
+    disconnect = first_token if gate is None else gate
     body: list[bytes] = []
     request = iter([{"type": "http.request", "body": json.dumps({"content": QUESTION}).encode()}])
 
     async def receive() -> dict[str, Any]:
         if (message := next(request, None)) is not None:
             return message
-        await first_token.wait()
+        await disconnect.wait()
         return {"type": "http.disconnect"}
 
     async def send(message: dict[str, Any]) -> None:
@@ -631,3 +637,110 @@ def test_client_disconnect_mid_stream_stores_no_answer(
     assert b"event: token" in body
     assert b"event: done" not in body
     assert history(client, chat_id) == [user_message()]
+
+
+def add_answer(db_sessions: Sessions, chat_id: str, doc: uuid.UUID) -> None:
+    """An assistant answer citing `doc`, stored as the answer stream stores it."""
+    in_session(
+        db_sessions,
+        lambda db: insert_assistant_message(db, uuid.UUID(chat_id), ANSWER, cited(doc)),
+    )
+
+
+def test_delete_chat_removes_chat_and_messages_then_404(
+    client: TestClient, db_engine: Engine, db_sessions: Sessions
+) -> None:
+    chat_id = new_chat(client)
+    owner = owner_of(db_engine, chat_id)
+    in_session(db_sessions, lambda db: insert_user_message(db, owner, uuid.UUID(chat_id), QUESTION))
+
+    response = client.delete(f"/chats/{chat_id}")
+
+    assert response.status_code == 204, response.text
+    assert response.content == b""
+    assert (count(db_engine, "chats"), count(db_engine, "messages")) == (0, 0)
+    again = client.delete(f"/chats/{chat_id}")
+    assert again.status_code == 404, again.text
+    assert again.json()["code"] == "not_found"
+
+
+def test_delete_another_owners_chat_404_and_keeps_it(
+    client: TestClient, db_engine: Engine, db_sessions: Sessions
+) -> None:
+    new_chat(client)
+    theirs_owner = add_owner(db_engine)
+    theirs = add_chat(db_engine, theirs_owner)
+    in_session(
+        db_sessions, lambda db: insert_user_message(db, theirs_owner, uuid.UUID(theirs), QUESTION)
+    )
+
+    response = client.delete(f"/chats/{theirs}")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["code"] == "not_found"
+    assert (count(db_engine, "chats"), count(db_engine, "messages")) == (2, 1)
+
+
+def test_delete_chat_without_a_cookie_404_and_creates_no_guest(
+    client: TestClient, db_engine: Engine
+) -> None:
+    theirs = add_chat(db_engine, add_owner(db_engine))
+
+    response = client.delete(f"/chats/{theirs}")
+
+    assert response.status_code == 404, response.text
+    assert "set-cookie" not in response.headers
+    assert (count(db_engine, "guests"), count(db_engine, "chats")) == (0, 1)
+
+
+@pytest.mark.usefixtures("fake_storage")
+def test_citations_of_a_deleted_document_stay_in_other_chats_history(
+    client: TestClient, db_engine: Engine, db_sessions: Sessions
+) -> None:
+    chat_a, doc = chat_with_doc(client, db_engine, db_sessions)
+    chat_b = new_chat(client)
+    add_answer(db_sessions, chat_a, doc)
+    add_answer(db_sessions, chat_b, doc)
+
+    assert client.delete(f"/documents/{doc}").status_code == 204
+
+    answer = {"role": "assistant", "content": ANSWER, "citations": cited(doc)}
+    assert history(client, chat_a) == [answer]
+    assert history(client, chat_b) == [answer]
+
+
+def test_client_disconnect_while_storing_the_answer_stores_no_partial_row(
+    client: TestClient,
+    db_engine: Engine,
+    db_sessions: Sessions,
+    streaming_replies: Callable[..., None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chat_id, _ = chat_with_doc(client, db_engine, db_sessions)
+    streaming_replies('{"relevant": [0]}', " ".join(["word"] * 30))
+    storing = asyncio.Event()
+    insert = chats.insert_assistant_message
+
+    async def stall_store(db: AsyncSession, chat: uuid.UUID, content: str, citations: Any) -> bool:
+        storing.set()
+        # The disconnect must cancel this wait; a store that finishes would send `done`.
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=10)
+        return await insert(db, chat, content, citations)
+
+    monkeypatch.setattr(chats, "insert_assistant_message", stall_store)
+
+    body = post_then_disconnect(client, chat_id, gate=storing)
+
+    assert storing.is_set()
+    assert b"event: token" in body
+    assert b"event: done" not in body
+    assert b"event: error" not in body
+    assert history(client, chat_id) == [user_message()]
+    with db_engine.connect() as conn:
+        idle = conn.execute(
+            text(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE datname = current_database() AND state = 'idle in transaction'"
+            )
+        ).scalar_one()
+    assert idle == 0

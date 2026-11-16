@@ -29,6 +29,11 @@ async def list_messages(id: UUID, db: DbSession, owner: ReadOwner) -> list[Messa
     return [MessageOut.model_validate(message) for message in messages]
 
 
+@router.delete("/{id}", status_code=204)
+async def delete_chat(id: UUID, db: DbSession, owner: ReadOwner) -> None:
+    await chats.delete_owner_chat(db, owner, id)
+
+
 async def _post_message(
     id: UUID, body: MessageIn, db: DbSession, owner: ReadOwner
 ) -> chats.PostedMessage:
