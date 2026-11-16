@@ -1,10 +1,11 @@
-COMPOSE := docker compose -f infrastructure/docker/docker-compose.yml
+# .env supplies the S3_* credentials that compose interpolates for seaweedfs
+COMPOSE := docker compose $(if $(wildcard .env),--env-file .env) -f infrastructure/docker/docker-compose.yml
 CHECK := python infrastructure/scripts/check.py
 
-.PHONY: help install db db-down api web check fast check-api check-web up images
+.PHONY: help install db s3 db-down migrate api worker web check fast check-api check-web up e2e images types
 
 help: ## List targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
 
 install: ## Install api and web dependencies
 	cd apps/api && uv sync
@@ -13,16 +14,25 @@ install: ## Install api and web dependencies
 db: ## Start Postgres + pgvector on :5432
 	$(COMPOSE) up -d --wait db
 
-db-down: ## Stop Postgres (data volume kept)
+s3: ## Start SeaweedFS S3 object storage on :8333
+	$(COMPOSE) up -d --wait seaweedfs
+
+db-down: ## Stop Postgres and SeaweedFS (data volumes kept)
 	$(COMPOSE) down
 
+migrate: ## Apply DB migrations (needs make db)
+	cd apps/api && uv run alembic upgrade head
+
 api: ## Run the API with reload on :8000
-	cd apps/api && uv run fastapi dev app/main.py
+	cd apps/api && uv run fastapi dev app/main.py --no-proxy-headers
+
+worker: ## Run the ingestion worker (needs make db, make s3, make migrate)
+	cd apps/api && uv run python -m app.workers.ingestion
 
 web: ## Run the web dev server on :5173
 	cd apps/web && npm run dev
 
-check: ## Full quality gate (needs `make db` for integration tests)
+check: ## Full quality gate (needs `make db` and `make s3` for integration tests)
 	$(CHECK)
 
 fast: ## Quality gate without integration tests
@@ -37,6 +47,14 @@ check-web: ## Quality gate, web only
 up: ## Run the full stack from production images (api :8000, web :8080)
 	$(COMPOSE) --profile app up --build
 
+e2e: ## End-to-end test against the full stack (needs S3_* in .env)
+	$(COMPOSE) -f tests/e2e/compose.e2e.yml --profile app up -d --build
+	cd apps/api && E2E_BASE_URL=http://localhost:8080 uv run pytest -q ../../tests/e2e; rc=$$?; cd ../.. && $(COMPOSE) -f tests/e2e/compose.e2e.yml --profile app stop api worker web; exit $$rc
+
 images: ## Build production images locally
 	docker build -f infrastructure/docker/api.Dockerfile -t ragidy-api .
 	docker build -f infrastructure/docker/web.Dockerfile -t ragidy-web .
+
+types: ## Regenerate shared API types from the OpenAPI schema
+	cd apps/api && uv run python ../../infrastructure/scripts/dump_openapi.py
+	cd packages/shared-types && npm ci && npm run gen

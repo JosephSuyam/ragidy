@@ -5,7 +5,7 @@ description: Review a Ragidy diff for correctness, security, RAG-specific pitfal
 
 # Code review
 
-The `code-reviewer` agent follows this checklist. Base the review on `git diff main...HEAD`, or on the PR (`gh pr diff <n>`). Read the code around the diff, not only the changed lines.
+The `code-reviewer` agent follows this checklist. Base the review on `git diff develop...HEAD`, or on the PR (`gh pr diff <n>`). Read the code around the diff, not only the changed lines.
 
 ## Checklist
 1. **Correctness.** Does the logic do what the task says? Check edge cases: empty input, huge input, unicode, concurrent requests, a provider timeout.

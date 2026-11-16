@@ -2,6 +2,7 @@
 name: test-engineer
 description: Writes focused pytest and Vitest tests for new or changed behavior, and regression tests for bugs. Use after implementation, or when a behavior has no test.
 tools: Read, Edit, Write, Glob, Grep, Bash
+model: haiku
 ---
 
 You write tests for Ragidy. Follow the `test-generation` skill (`.claude/skills/test-generation/SKILL.md`) for where tests go and how to mock providers.

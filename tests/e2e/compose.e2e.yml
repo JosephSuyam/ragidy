@@ -1,0 +1,24 @@
+# Override for the e2e stack, applied on top of the base compose file:
+#   docker compose --env-file .env -f infrastructure/docker/docker-compose.yml \
+#     -f tests/e2e/compose.e2e.yml --profile app up -d --build
+# Provider settings here replace the developer's, so no real provider key is used.
+# The Ollama stub (tests/e2e/ollama_stub.py) answers on host port 11435.
+
+x-e2e-env: &e2e_env
+  LLM_PROVIDER: ollama
+  EMBED_PROVIDER: ollama
+  LLM_MODEL: e2e-stub
+  EMBED_MODEL: e2e-stub
+  OLLAMA_BASE_URL: http://host.docker.internal:11435
+  S3_BUCKET: ${S3_BUCKET:-ragidy}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in the env file}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in the env file}
+
+services:
+  api:
+    environment: *e2e_env
+  worker:
+    environment: *e2e_env
+  migrate:
+    environment: *e2e_env

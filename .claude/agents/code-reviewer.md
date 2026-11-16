@@ -6,7 +6,7 @@ tools: Read, Glob, Grep, Bash
 
 You review Ragidy changes. You never edit files.
 
-Follow the `code-review` skill (`.claude/skills/code-review/SKILL.md`). Review `git diff main...HEAD` unless you are given a PR number (`gh pr diff <n>`). Read the surrounding code and every caller of the changed functions.
+Follow the `code-review` skill (`.claude/skills/code-review/SKILL.md`). Review `git diff develop...HEAD` unless you are given a PR number (`gh pr diff <n>`). Read the surrounding code and every caller of the changed functions.
 
 Output one line per finding, most severe first: `path:line: <blocker|major|minor>: <problem>. <fix>.` Then give a verdict: `approve`, `approve with minors`, or `changes required`.
 

@@ -1,11 +1,32 @@
-import { Button } from '@/components/ui/button'
+import { useRef } from 'react'
+import { ExpiredNotice } from '@/components/layout/ExpiredNotice'
+import { SessionProvider } from '@/hooks/SessionProvider'
+import { useSession } from '@/hooks/useSession'
+import { Router } from '@/routes'
+
+function Content() {
+  const { sessionVersion, guestExpired, dismissExpired } = useSession()
+  const pageRef = useRef<HTMLDivElement>(null)
+  return (
+    <div className="flex min-h-svh flex-col md:h-svh">
+      <ExpiredNotice
+        expired={guestExpired}
+        onDismiss={() => {
+          dismissExpired()
+          pageRef.current?.focus()
+        }}
+      />
+      <div ref={pageRef} tabIndex={-1} className="flex min-h-0 flex-1 flex-col outline-none">
+        <Router key={sessionVersion} />
+      </div>
+    </div>
+  )
+}
 
 export default function App() {
   return (
-    <main className="mx-auto flex min-h-svh max-w-2xl flex-col items-center justify-center gap-4 p-6">
-      <h1 className="text-3xl font-semibold tracking-tight">Ragidy</h1>
-      <p className="text-muted-foreground">Chat with your files and links.</p>
-      <Button disabled>Upload a document</Button>
-    </main>
+    <SessionProvider>
+      <Content />
+    </SessionProvider>
   )
 }

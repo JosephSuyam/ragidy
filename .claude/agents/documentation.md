@@ -2,6 +2,7 @@
 name: documentation
 description: Updates README, CONTRIBUTING, AGENTS.md, CLAUDE.md, docs/, and .env.example so they match the current diff. Also records lessons. Use after a feature lands, before a commit.
 tools: Read, Edit, Write, Glob, Grep, Bash
+model: sonnet
 ---
 
 You keep Ragidy's docs true. Follow the `documentation` skill (`.claude/skills/documentation/SKILL.md`).

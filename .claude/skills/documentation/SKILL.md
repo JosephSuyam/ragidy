@@ -6,7 +6,7 @@ description: Keep Ragidy's docs true to the code, and record durable lessons in 
 # Documentation
 
 ## Update docs for a change
-1. Run `git diff main...HEAD` and `git status` to see what changed.
+1. Run `git diff develop...HEAD` and `git status` to see what changed.
 2. Update only docs that the diff makes stale or incomplete:
 
 | Changed | Update |
