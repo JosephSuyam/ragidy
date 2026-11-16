@@ -53,6 +53,15 @@ jobs:
           EOF
           cat "$s3_env" >> "$GITHUB_ENV"
           docker compose --env-file "$s3_env" -f infrastructure/docker/docker-compose.yml up -d --wait seaweedfs
+      - name: Check SeaweedFS exposes only S3
+        run: |
+          docker compose --env-file "$RUNNER_TEMP/s3-test-only.env" -f infrastructure/docker/docker-compose.yml exec -T seaweedfs sh -c '
+            ip=$(hostname -i)
+            for p in 9333 19333 8080 18080 8888 18888 8181 9101; do
+              nc -z -w2 "$ip" "$p" && { echo "OPEN $p"; exit 1; }
+            done
+            nc -z -w2 "$ip" 18333 && nc -z -w2 "$ip" 8333
+            curl -fsS -o /dev/null "http://$ip:8333/healthz"'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -64,7 +73,30 @@ jobs:
         working-directory: apps/api
       - run: python infrastructure/scripts/check.py --api
 
-  # e2e: add a Playwright job here when tests/e2e gets its first test.
+  # Full stack from the compose app profile with the Ollama stub; test-only S3 credentials, no repo .env.
+  e2e:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - run: uv sync --locked
+        working-directory: apps/api
+      - name: Start SeaweedFS S3
+        run: *s3-start
+      - run: echo "COMPOSE=docker compose --env-file $RUNNER_TEMP/s3-test-only.env -f infrastructure/docker/docker-compose.yml -f tests/e2e/compose.e2e.yml --profile app" >> "$GITHUB_ENV"
+      # No --wait: the one-shot migrate service exits; the test polls /api/health.
+      - run: $COMPOSE up -d --build
+      - run: E2E_BASE_URL=http://localhost:8080 uv run pytest -q ../../tests/e2e
+        working-directory: apps/api
+      - if: failure()
+        run: '[ -n "$COMPOSE" ] && $COMPOSE logs --tail 200 seaweedfs migrate api worker web'
 
   web:
     if: github.event_name == 'push'
@@ -123,7 +155,7 @@ jobs:
   # Self-annealing: on a red push, Claude follows .claude/skills/debugging (CI section),
   # pushes the fix to fix/autofix-<short sha>, and opens a PR into develop.
   autofix:
-    needs: [api, web, security]
+    needs: [api, e2e, web, security]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -198,7 +230,7 @@ jobs:
   # Builds the images once per staging tree, tagged tree-<tree hash> and staging.
   # A staging-to-main merge has the same tree, so deploy-production promotes these images.
   build:
-    needs: [api, web, security]
+    needs: [api, web, e2e, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
     runs-on: ubuntu-latest
     permissions:
@@ -243,7 +275,7 @@ jobs:
 
   # Promotes the images staging built for this tree. Never rebuilds.
   deploy-production:
-    needs: [api, web, security]
+    needs: [api, web, e2e, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
