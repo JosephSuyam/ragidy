@@ -31,7 +31,7 @@ ADR 0001 ships a single user with no auth. The MVP now has two tiers: guests wit
 
 ## Consequences
 - New dependency: `argon2-cffi`. The OAuth client adds none (step 7 addendum).
-- The guest tier is public and anonymous, so the deferred SeaweedFS port hardening in ADR 0002 must land before any exposed deployment.
+- The guest tier is public and anonymous, so SeaweedFS must expose only its S3 port; that hardening landed in the ADR 0002 amendment (2026-11-16).
 - shortcut: rate-limit and chat counters live in memory per API process, so they reset on restart and only work with one API process; move them to Postgres before running more than one API process. The owner row lock works across processes.
 - The chat counter starts fresh after guest-to-user migration. This is accepted.
 - Behind the web container, `TRUSTED_PROXIES` must list it, or every client shares one rate-limit key.
