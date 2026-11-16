@@ -24,7 +24,7 @@ ADR 0001 resolves the LLM and the embedding model in one factory, `app/core/prov
 - **Settings:** `llm_provider: Literal["anthropic", "openai", "ollama", "google", "groq"]`, `embed_provider: Literal["openai", "ollama"]`, `anthropic_api_key`, `openai_api_key`, `google_api_key` and `groq_api_key: SecretStr` (default empty), `ollama_base_url: str = "http://localhost:11434"`. Keys live in `Settings` because pydantic reads `.env` without exporting it to `os.environ`, which the SDK classes read. A key is unwrapped with `.get_secret_value()` only at the constructor call.
 - **Missing key:** the factory raises `ValueError` naming the setting, never its value, for example "ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic". The check runs when the model is built, not in a `Settings` validator, because CI and tests run without keys.
 - **Retries:** chat models get the SDKs' built-in `max_retries=2` (3 attempts in total) and a 60 s timeout. SDK retries cover connection errors, 408, 409, 429 and 5xx, never other 4xx. The OpenAI embedding gets `EMBED_MAX_RETRIES = 1`, because LlamaIndex `OpenAIEmbedding` applies `max_retries` twice (the OpenAI client retry, then its own tenacity wrapper), so one embed call makes at most 2 requests, on transient errors only. The ingestion job's 3 attempts (ADR 0002) sit on top. No `.with_retry` on top. Ollama runs locally and has no retry.
-- **Ollama ships now.** In Docker, the api container reaches the host's Ollama at `http://host.docker.internal:11434` through `OLLAMA_BASE_URL`.
+- **Ollama ships now.** In Docker, the api and worker containers reach the host's Ollama at `http://host.docker.internal:11434` through `OLLAMA_BASE_URL`.
 
 ## Alternatives
 - **Option B: the factory returns a plain config dataclass, and `app/agents` and `app/rag` build their own models.** It keeps the hard rule with no exception, but gives tests two mock points instead of one, and needs about five doc changes.
@@ -38,7 +38,7 @@ ADR 0001 resolves the LLM and the embedding model in one factory, `app/core/prov
 - One mock point for LLMs and embeddings in tests.
 - Keys stay out of logs and errors: `SecretStr` hides them in `Settings` reprs, and the missing-key error names only the setting. LlamaIndex `OpenAIEmbedding` stores `api_key` as a plain str, so its `repr`, `str`, `to_dict()` and `to_json()` show the raw key; never log or serialize the embedding model.
 - `.env.example`, `AGENTS.md` and agent guides need the new settings and the exception; the documentation agent updates them.
-- On Linux Docker, `host.docker.internal` needs `extra_hosts: ["host.docker.internal:host-gateway"]` on the api service.
+- On Linux Docker, `host.docker.internal` needs `extra_hosts: ["host.docker.internal:host-gateway"]`. Compose sets it in the `x-api` anchor, so the api, worker and migrate services all get it.
 
 ## Amendment (2026-11-09)
 - `LLM_PROVIDER` gains `google` (Google AI Studio, `GOOGLE_API_KEY`) and `groq` (`GROQ_API_KEY`), built with `langchain-google-genai` `ChatGoogleGenerativeAI` and `langchain-groq` `ChatGroq`. Both get the 60 s timeout and the missing-key `ValueError`. Embeddings stay `openai | ollama`. Vertex AI is out of scope.

@@ -5,6 +5,7 @@
 - Amends: [0001](0001-stack-and-scope.md) (Store: Postgres no longer holds all state)
 - Amended: 2026-11-05 (retry wording: no `.with_retry`, see [0004](0004-provider-factory.md))
 - Amended: 2026-11-08 (retry clears `error`, success writes `embed_model`, job timeout, worker advisory lock, retry rate limit, user-safe `error`, `IngestionError` fails at once with no retry, lock re-take, see [0006](0006-vector-store.md))
+- Amended: 2026-11-16 (SeaweedFS internal ports bound to loopback, Iceberg and Lance off)
 
 ## Context
 Ingestion needs the original file: a failed job retries from it, and a new embedding model needs a re-index from it. ADR 0001 keeps all state in one Postgres database, but it does not say where raw uploads live or how an ingestion job reaches a worker. Ingestion is slow (parse, embed), so it must not run inside the request.
@@ -13,7 +14,7 @@ Ingestion needs the original file: a failed job retries from it, and a new embed
 - **Object storage: SeaweedFS, through the S3 API.** SeaweedFS (Apache-2.0, official image `chrislusf/seaweedfs`) runs all-in-one in docker compose, with its S3 API on port 8333 published only on localhost; production uses any S3-compatible store. It holds the raw bytes of each upload and of each fetched URL, one object per document. Services validate the input first, then write the object, then insert the `documents` row with its `object_key`.
   - **Key:** the server generates a UUID before the object write and builds the key as `documents/<uuid>`. The key never comes from the filename, the URL or any other user input. The original filename or URL is kept only in `source`.
   - **MIME:** the object's `Content-Type` is the MIME type the server detected and checked against the allowlist, never the client's `Content-Type` header.
-  - **Secrets:** storage credentials come only from env or a secret store and are never committed. There are no default credentials. The S3 API (8333) is private, with no anonymous access and no public-read policy. The internal SeaweedFS ports (master 9333, volume 8080, filer 8888, whose HTTP API can read and write every bucket) have no auth and are not published to the host; the URL fetcher's SSRF private-IP block keeps user-supplied URLs from reaching them, and only trusted containers share the compose network. shortcut: hardening them (for example `-filer.disableHttp` or a separate network) is deferred until verified with S3, and comes before any multi-tenant or exposed deployment. Compose fails closed: the `seaweedfs` container refuses to start when `S3_ACCESS_KEY_ID` or `S3_SECRET_ACCESS_KEY` is unset, because SeaweedFS S3 allows anonymous access when no identity is configured.
+  - **Secrets:** storage credentials come only from env or a secret store and are never committed. There are no default credentials. The S3 API (8333) is private, with no anonymous access and no public-read policy. The internal SeaweedFS ports (master 9333, volume 8080, filer 8888, whose HTTP API can read and write every bucket) have no auth, are not published to the host, and listen only on 127.0.0.1 inside the container (see the 2026-11-16 amendment); the URL fetcher's SSRF private-IP block keeps user-supplied URLs from reaching the storage container, and only trusted containers share the compose network. Compose fails closed: the `seaweedfs` container refuses to start when `S3_ACCESS_KEY_ID` or `S3_SECRET_ACCESS_KEY` is unset, because SeaweedFS S3 allows anonymous access when no identity is configured.
 - **URL fetch: in the request, in `app/services`.** A URL is fetched once, under the existing timeout and size cap, so the worker only ever reads from object storage. Validation and fetch live together in `app/services`, because the fetched bytes go straight to object storage and `app/rag` must never touch it. The fetcher checks the IP it actually connects to, not only the resolved name, to block DNS rebinding. It checks every redirect hop the same way, or refuses redirects.
 - **Job queue: the `documents` table.** The row is the job. Services insert it with status `pending`. Exactly one worker process polls and claims one row at a time:
   ```sql
@@ -57,3 +58,10 @@ Ingestion needs the original file: a failed job retries from it, and a new embed
 
 ## Amendment (2026-11-05)
 - There is no `object_key` column. The key is `documents/<id>`, derived from `documents.id`. The service generates that id before the object write, so the key still never comes from user input.
+
+## Amendment (2026-11-16)
+- **SeaweedFS internals on loopback.** The `seaweedfs` container runs `server -s3 -ip=127.0.0.1 -ip.bind=127.0.0.1 -s3.ip.bind=0.0.0.0 -s3.port.iceberg=0 -s3.port.lance=0`. Master (9333, 19333), volume (8080, 18080) and filer (8888, 18888) listen only on 127.0.0.1. S3 (8333) alone listens on 0.0.0.0. Iceberg (8181) and Lance (9101) are off; they were on by default and open on the compose network.
+- The S3 gRPC port 18333 stays on 0.0.0.0, because it cannot be disabled. Its IAM admin calls accept only local peers when no filer signing key is set.
+- A CI step in the api job probes the container and checks that only S3 answers.
+- Rejected: `-filer.disableHttp`. It closes only 8888 and leaves master 9333 open, whose unauthenticated `/col/delete` can drop a bucket's collection, and volume 8080 open.
+- Rejected: a separate network for SeaweedFS. The api and worker must reach S3, so they would share that network anyway.

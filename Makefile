@@ -2,7 +2,7 @@
 COMPOSE := docker compose $(if $(wildcard .env),--env-file .env) -f infrastructure/docker/docker-compose.yml
 CHECK := python infrastructure/scripts/check.py
 
-.PHONY: help install db s3 db-down migrate api worker web check fast check-api check-web up images types
+.PHONY: help install db s3 db-down migrate api worker web check fast check-api check-web up e2e images types
 
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
@@ -46,6 +46,10 @@ check-web: ## Quality gate, web only
 
 up: ## Run the full stack from production images (api :8000, web :8080)
 	$(COMPOSE) --profile app up --build
+
+e2e: ## End-to-end test against the full stack (needs S3_* in .env)
+	$(COMPOSE) -f tests/e2e/compose.e2e.yml --profile app up -d --build
+	cd apps/api && E2E_BASE_URL=http://localhost:8080 uv run pytest -q ../../tests/e2e; rc=$$?; cd ../.. && $(COMPOSE) -f tests/e2e/compose.e2e.yml --profile app stop api worker web; exit $$rc
 
 images: ## Build production images locally
 	docker build -f infrastructure/docker/api.Dockerfile -t ragidy-api .

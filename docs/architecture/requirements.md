@@ -175,7 +175,7 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 - [ ] SSRF: URL fetching follows ADR 0002 and R8 (http(s) only, only public IPs on the connected address and every redirect hop, one deadline, size cap). Proxy env vars are ignored.
   Accepted risk: a failed fetch takes no document slot, so `URL_FETCH_PER_HOUR` is what bounds fetches.
 - [ ] At startup, a provider with a client id but no client secret, any enabled provider with an empty `AUTH_SECRET`, or a set `AUTH_SECRET` shorter than 32 characters fails with an error that names the setting.
-- [ ] Before the public guest tier is deployed, the internal SeaweedFS ports are hardened as ADR 0002 requires (its deferred `-filer.disableHttp` or separate-network step).
+- [x] Before the public guest tier is deployed, the internal SeaweedFS ports are hardened: the container binds master, volume and filer to 127.0.0.1, so only S3 on 8333 is reachable (ADR 0002 amendment 2026-11-16). A CI step checks this.
 
 ### Configurability
 Every limit is read from env through `Settings` (`app/core`). Integers must be 1 or more, `URL_FETCH_TIMEOUT_SECONDS` must be above 0, and each `TRUSTED_PROXIES` entry must be an IP or CIDR, or startup fails. Each entry is normalized to a network string (`10.0.0.0/8` stays as is, `192.168.1.1` becomes `192.168.1.1/32`), the form `ProxyHeadersMiddleware` takes.
