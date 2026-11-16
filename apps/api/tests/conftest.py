@@ -381,6 +381,14 @@ class _Handler(BaseHTTPRequestHandler):
         elif path == "/slow":
             time.sleep(2)
             self._send(200, b"late")
+        elif path.startswith("/slowhop/"):
+            # Each hop takes 0.2 s, so a chain of n hops takes at least 0.2 * (n + 1) s.
+            time.sleep(0.2)
+            hops = int(arg)
+            if hops:
+                self._send(302, b"", Location=f"/slowhop/{hops - 1}")
+            else:
+                self._send(200, b"done")
         else:
             self._send(404, b"not found")
 
