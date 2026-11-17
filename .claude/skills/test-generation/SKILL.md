@@ -19,7 +19,7 @@ The `test-engineer` agent follows these rules.
 | API unit | `apps/api/tests/`, mirroring `app/` | pytest |
 | Web unit and component | `apps/web/tests/` | Vitest + Testing Library |
 | Cross-app integration (API + Postgres) | `tests/integration/` | pytest, `@pytest.mark.integration` |
-| End-to-end through the browser | `tests/e2e/` | add Playwright when the first e2e test is needed |
+| End-to-end through the browser | `tests/e2e/` | pytest-playwright in the uv group `e2e` (`apps/api`); prefer role and label locators (`exact=True` where labels overlap, e.g. "Message" vs "Messages"); accept `window.confirm` with `page.on("dialog", ...)` |
 | Sample files (PDF, HTML, a golden Q&A set) | `tests/fixtures/` | shared |
 
 ## Rules
