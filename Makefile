@@ -48,8 +48,9 @@ up: ## Run the full stack from production images (api :8000, web :8080)
 	$(COMPOSE) --profile app up --build
 
 e2e: ## End-to-end test against the full stack (needs S3_* in .env)
+	cd apps/api && uv run --group e2e playwright install chromium
 	$(COMPOSE) -f tests/e2e/compose.e2e.yml --profile app up -d --build
-	cd apps/api && E2E_BASE_URL=http://localhost:8080 uv run pytest -q ../../tests/e2e; rc=$$?; cd ../.. && $(COMPOSE) -f tests/e2e/compose.e2e.yml --profile app stop api worker web; exit $$rc
+	cd apps/api && E2E_BASE_URL=http://localhost:8080 uv run --group e2e pytest -q ../../tests/e2e; rc=$$?; cd ../.. && $(COMPOSE) -f tests/e2e/compose.e2e.yml --profile app stop api worker web; exit $$rc
 
 images: ## Build production images locally
 	docker build -f infrastructure/docker/api.Dockerfile -t ragidy-api .
