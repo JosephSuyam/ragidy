@@ -54,7 +54,7 @@ make web            # web on :5173
 make check          # full quality gate; `make fast` skips integration tests
 make types          # regenerate packages/shared-types (openapi.json, api.d.ts) from the API schema
 make up             # full stack from production images; needs S3_* in .env
-make e2e            # e2e test on the full stack with an Ollama stub on host :11435; needs S3_* in .env
+make e2e            # Playwright e2e test on the full stack with an Ollama stub on host :11435; needs S3_* in .env
 ```
 Without `make`, run the commands in `Makefile` directly. The gate is `python infrastructure/scripts/check.py [--api|--web] [--fast]`.
 Code navigation: when `graphify-out/graph.json` exists, run `graphify query "<question>"` (or `path`, `explain`) before grepping or reading source, and `graphify update .` after code changes.
