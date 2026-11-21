@@ -21,7 +21,7 @@ from app.repositories.documents import (
     requeue_for_owner,
 )
 from app.services.owners import CurrentOwner, lock_write_owner
-from app.services.rate_limit import document_retries, rate_limited, url_fetches
+from app.services.rate_limit import document_retries, rate_limited, uploads, url_fetches
 from app.services.url_fetch import fetch_url
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,13 @@ async def check_cap(db: AsyncSession, owner: CurrentOwner | None, max_docs: int)
     if owner is not None:
         await _ensure_below_cap(db, owner.owner_id, max_docs)
     await db.commit()
+
+
+def limit_uploads(rate_key: str) -> None:
+    """Every attempt counts against UPLOAD_PER_HOUR for `rate_key`, before the body is read."""
+    retry_after = uploads.hit(rate_key, get_settings().upload_per_hour)
+    if retry_after is not None:
+        raise rate_limited(retry_after)
 
 
 async def fetch_document_url(url: str, rate_key: str, max_bytes: int) -> tuple[bytes, str]:

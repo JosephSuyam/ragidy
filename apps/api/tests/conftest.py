@@ -46,6 +46,7 @@ from app.services.rate_limit import (
     document_retries,
     guest_creations,
     login_failures,
+    uploads,
     url_fetches,
 )
 
@@ -172,6 +173,7 @@ def _reset_app_state() -> None:
     auth_requests.clear()
     login_failures.cache_clear()
     url_fetches.clear()
+    uploads.clear()
     document_retries.clear()
     chat_messages.clear()
     storage._client.cache_clear()
