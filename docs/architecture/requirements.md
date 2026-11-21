@@ -92,6 +92,7 @@ Account enumeration is accepted: `409 email_taken` (R2) already reveals whether 
 - [x] A timeout (`URL_FETCH_TIMEOUT_SECONDS` for the whole fetch, redirects included), a connection or DNS error, a non-2xx response or more than 3 redirects returns `422 url_fetch_failed`.
 - [x] A URL with credentials (`user:pass@`), submitted or in a redirect, returns `422 url_blocked`. NAT64 addresses (`64:ff9b::/96`) are reserved, so they are blocked. A malformed host (a bad DNS label) or a response with a `Content-Encoding` other than `identity` returns `422 url_fetch_failed`.
 - [x] An owner, or a client IP key with no owner yet, may start `URL_FETCH_PER_HOUR` URL fetches an hour. Every attempt counts, before the fetch. Over that, `POST /documents/url` returns `429 rate_limited` with `Retry-After`.
+- [x] An owner, or a client IP key with no owner yet, may start `UPLOAD_PER_HOUR` uploads an hour. A `409 document_limit_reached` does not count; every later attempt counts, before the body is read, including ones that end in `413`, `415` or `400`. Over that, `POST /documents` returns `429 rate_limited` with `Retry-After`, reads no body and writes no object or row. Test: `test_upload_rate_limit_counts_every_attempt`.
 
 ### R9 Document caps
 - [x] Given an owner with `MAX_DOCS_<tier>` documents in any status, when they upload or add a URL, then the response is `409 document_limit_reached`, the message states the cap, there is no row, and the object is removed.
@@ -146,8 +147,8 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 | GET | `/auth/providers` | none | `200 [{id, name}]` | none |
 | GET | `/auth/oauth/{provider}/start` | none | `302` to the provider, sets `ragidy_oauth` | `404` |
 | GET | `/auth/oauth/{provider}/callback` | `code`, `state` | `302 <PUBLIC_BASE_URL>/`, sets `ragidy_session` | `302 <PUBLIC_BASE_URL>/login?error=oauth_failed` |
-| POST | `/documents` | multipart `file` | `202 {document}` | `400` (malformed multipart), `401 session_expired` (owner gone mid-request), `409 document_limit_reached`, `413 too_large`, `415 unsupported_type`, `429 rate_limited` (guest creation) |
-| POST | `/documents/url` | `{url}` (at most 2048 characters) | `202 {document}` | as above except `400`, plus `422 url_blocked`, `422 url_fetch_failed`, `429 rate_limited` (URL fetches) |
+| POST | `/documents` | multipart `file` | `202 {document}` | `400` (malformed multipart), `401 session_expired` (owner gone mid-request), `409 document_limit_reached`, `413 too_large`, `415 unsupported_type`, `429 rate_limited` (guest creation, uploads) |
+| POST | `/documents/url` | `{url}` (at most 2048 characters) | `202 {document}` | as above except `400` and `429 rate_limited` (uploads), plus `422 url_blocked`, `422 url_fetch_failed`, `429 rate_limited` (URL fetches) |
 | GET | `/documents` | none | `200 [{document}]` | none |
 | GET | `/documents/{id}` | none | `200 {document}` | none |
 | POST | `/documents/{id}/retry` | none | `202 {document}` | `409 document_busy` |
@@ -164,7 +165,7 @@ Paths are API-side and unprefixed, like `/health`. The browser reaches them unde
 
 ### Security
 - [x] Passwords are hashed with argon2id (`argon2-cffi` defaults); plain passwords are never logged or stored. Hash and verify run in a threadpool behind a fixed concurrency cap (an internal constant, not config), because each call is CPU-bound and takes about 64 MiB.
-- [x] Rate limits: `POST /auth/register` and `POST /auth/login` allow `RATE_LIMIT_AUTH_PER_MINUTE` requests a minute per client IP key. Login allows `LOGIN_MAX_FAILURES` failures per `LOGIN_FAILURE_WINDOW_MINUTES` minutes per (email, client IP key), so an attacker on another IP cannot lock out a victim. Guest creation (R1), URL fetches (R8) and chat messages (R12) have their own limits. Excess returns `429 rate_limited` with `Retry-After`.
+- [x] Rate limits: `POST /auth/register` and `POST /auth/login` allow `RATE_LIMIT_AUTH_PER_MINUTE` requests a minute per client IP key. Login allows `LOGIN_MAX_FAILURES` failures per `LOGIN_FAILURE_WINDOW_MINUTES` minutes per (email, client IP key), so an attacker on another IP cannot lock out a victim. Guest creation (R1), URL fetches and uploads (R8) and chat messages (R12) have their own limits. Excess returns `429 rate_limited` with `Retry-After`.
   shortcut: the counters live in memory per API process, so they reset on restart and only work with one API process; move them to Postgres before running more than one API process.
   Each check prunes expired windows, so keys built from random emails or rotated IPs do not grow memory without limit.
   The chat counter is keyed by owner, so it starts fresh after the guest-to-user migration (R6). This is accepted.
@@ -203,6 +204,7 @@ Every limit is read from env through `Settings` (`app/core`). Integers must be 1
 | `TRUSTED_PROXIES` | empty | Comma-separated IPs or CIDRs whose forwarded headers count, normalized to network strings; empty ignores forwarded headers |
 | `GUEST_CREATE_PER_IP_PER_HOUR` | `10` | Guests one client IP key (IPv4 address or IPv6 `/64`) may create per hour |
 | `URL_FETCH_PER_HOUR` | `20` | URL fetch attempts per owner, or per client IP key with no owner yet, per hour |
+| `UPLOAD_PER_HOUR` | `20` | Upload attempts per owner, or per client IP key with no owner yet, per hour; a `409 document_limit_reached` does not count |
 | `DOCUMENT_RETRY_PER_HOUR` | `10` | Document retry attempts per owner per hour; each retry re-embeds the whole document |
 | `CHAT_MESSAGES_PER_HOUR_GUEST` | `20` | Chat messages per guest per hour |
 | `CHAT_MESSAGES_PER_HOUR_USER` | `100` | Chat messages per user per hour |
