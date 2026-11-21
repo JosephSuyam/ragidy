@@ -86,17 +86,26 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
-      - run: uv sync --locked
+      - run: uv sync --locked --group e2e
+        working-directory: apps/api
+      - run: uv run --group e2e playwright install --with-deps --only-shell chromium
         working-directory: apps/api
       - name: Start SeaweedFS S3
         run: *s3-start
       - run: echo "COMPOSE=docker compose --env-file $RUNNER_TEMP/s3-test-only.env -f infrastructure/docker/docker-compose.yml -f tests/e2e/compose.e2e.yml --profile app" >> "$GITHUB_ENV"
       # No --wait: the one-shot migrate service exits; the test polls /api/health.
       - run: $COMPOSE up -d --build
-      - run: E2E_BASE_URL=http://localhost:8080 uv run pytest -q ../../tests/e2e
+      - run: E2E_BASE_URL=http://localhost:8080 uv run --group e2e pytest -q ../../tests/e2e --tracing retain-on-failure --screenshot only-on-failure --output "$RUNNER_TEMP/playwright"
         working-directory: apps/api
       - if: failure()
         run: '[ -n "$COMPOSE" ] && $COMPOSE logs --tail 200 seaweedfs migrate api worker web'
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright
+          path: ${{ runner.temp }}/playwright
+          if-no-files-found: ignore
+          retention-days: 7
 
   web:
     if: github.event_name == 'push'

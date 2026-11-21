@@ -45,6 +45,7 @@ async def upload_document(
 ) -> DocumentOut:
     limits, max_bytes = documents.upload_limits(owner)
     await documents.check_cap(db, owner, limits.max_docs)
+    documents.limit_uploads(_rate_key(request, owner))
     data, filename = await _read_upload(request, max_bytes)
     source = PurePosixPath(filename.replace("\\", "/").replace("\x00", "")).name or "upload"
     mime = documents.content_type(data, source, limits)
@@ -60,13 +61,16 @@ async def add_url(
 ) -> DocumentOut:
     limits, max_bytes = documents.upload_limits(owner)
     await documents.check_cap(db, owner, limits.max_docs)
-    rate_key = str(owner.owner_id) if owner else client_ip_key(request)
-    data, path = await documents.fetch_document_url(body.url, rate_key, max_bytes)
+    data, path = await documents.fetch_document_url(body.url, _rate_key(request, owner), max_bytes)
     mime = documents.content_type(data, path, limits)
     doc = await documents.create_document(
         db, data, mime, body.url, limits.max_docs, lambda: write_owner(request, response, db, owner)
     )
     return DocumentOut.model_validate(doc)
+
+
+def _rate_key(request: Request, owner: ReadOwner) -> str:
+    return str(owner.owner_id) if owner else client_ip_key(request)
 
 
 async def _read_upload(request: Request, max_bytes: int) -> tuple[bytes, str]:

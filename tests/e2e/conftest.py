@@ -1,4 +1,4 @@
-"""Shared e2e setup: skip without E2E_BASE_URL, start the Ollama stub, wait for the stack."""
+"""Shared e2e setup: the stack's base URL, the Ollama stub, and a wait for the stack."""
 
 import os
 import time
@@ -14,10 +14,8 @@ HEALTH_INTERVAL_S = 2
 
 @pytest.fixture(scope="session")
 def base_url() -> str:
-    url = os.environ.get("E2E_BASE_URL", "").rstrip("/")
-    if not url:
-        pytest.skip("E2E_BASE_URL is not set; start the e2e stack first")
-    return url
+    # Overrides the pytest-playwright fixture so page.goto("/") resolves against the stack.
+    return os.environ.get("E2E_BASE_URL", "").rstrip("/")
 
 
 @pytest.fixture(scope="session")
@@ -29,13 +27,6 @@ def stack(base_url: str) -> Iterator[str]:
     finally:
         server.shutdown()
         server.server_close()
-
-
-@pytest.fixture
-def client(stack: str) -> Iterator[httpx.Client]:
-    # A new client per test means a new cookie jar, so each test is its own guest.
-    with httpx.Client(base_url=stack, headers={"Origin": stack}, timeout=60) as http:
-        yield http
 
 
 def _wait_healthy(base_url: str) -> None:

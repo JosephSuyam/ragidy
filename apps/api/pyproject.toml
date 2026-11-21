@@ -34,6 +34,9 @@ dev = [
     "ruff>=0.17.3",
     "types-boto3[s3]>=1.43.126",
 ]
+e2e = [
+    "pytest-playwright>=0.10.0",
+]
 
 [tool.uv]
 # nltk >= 3.10.3 refuses hardlinked data files (st_nlink > 1), and uv hardlinks from its cache by default.

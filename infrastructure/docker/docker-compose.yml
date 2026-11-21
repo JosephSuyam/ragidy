@@ -63,7 +63,11 @@ services:
     <<: *api
     ports:
       - "8000:8000"
-    networks: [default, proxy]
+    # Distinct priorities: Compose 2.24.6 sorts equal ones unstably and then attaches only one network (docker/compose#11533).
+    networks:
+      default:
+        priority: 1
+      proxy: {}
     depends_on:
       db:
         condition: service_healthy
