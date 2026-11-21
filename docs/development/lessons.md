@@ -37,7 +37,6 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 
 ## Tooling and CI
 - Add an import in the same edit as its first use, because the post-edit hook strips imports it sees as unused, so a split edit leaves an undefined name (F821) that fails the stop hook. (workflow, 2026-11-08)
-- Use `python infrastructure/scripts/check.py`, never ad-hoc lint/test commands, because hooks and CI run exactly that gate. (workflow, 2026-11-03)
 - Do bulk path renames in one regex pass, never as chained `str.replace` calls, because later pairs re-match earlier output (`scripts/check.py` → `infrastructure/infrastructure/...`). (tooling, 2026-11-03)
 - Quote YAML frontmatter values that contain `: `, because unquoted ones silently fail to parse (command descriptions fell back to body text). (workflow, 2026-11-03)
 - oxlint only warns by default, so `npm run lint` uses `--deny-warnings`; keep it, or lint never blocks. (web, 2026-11-03)
@@ -47,4 +46,5 @@ Rules learned from real mistakes. Record them with the `documentation` skill. Ke
 - In nginx, `proxy_pass` to a Docker service through `resolver 127.0.0.11` and a variable (`set $api http://api:8000`), never a literal host, because nginx resolves literal upstreams at startup and fails `nginx -t` (`host not found in upstream "api"`) when the service is not up. (infra, 2026-11-06)
 - On nginx routes whose query holds a secret (the OAuth callback), turn off both `access_log` and `error_log`, because nginx error lines of every level quote the full request line, query included. (infra, 2026-11-06)
 - Probe whether a port is exposed with a TCP connect (`nc -z`), never with `curl`'s exit status, because curl exits 1 on an open gRPC port just as on a refused connection, so the SeaweedFS exposure probe passed with gRPC ports open (caught in review). (infra, 2026-11-16)
+- Give each network of a multi-network compose service a distinct `priority` (long syntax), because Compose 2.24.6 (Docker Desktop) sorts equal priorities unstably and created `api` on `proxy` only, so uploads failed with `EndpointConnectionError` to `seaweedfs` (docker/compose#11533). (infra, 2026-11-17)
 - Tell parallel agents to prefix their scratchpad files, because agents share the session scratchpad and one agent's `smoke.py` overwrote another's. (workflow, 2026-11-08)

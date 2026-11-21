@@ -41,7 +41,7 @@ The storage integration test also needs the `S3_*` values exported in your shell
 - `apps/web`: React app
 - `packages/shared-types`: TypeScript types generated from the API's OpenAPI schema (`make types`)
 - `infrastructure`: Dockerfiles, compose, DB init, the gate script
-- `tests`: cross-app integration, e2e (`make e2e`: needs `S3_*` in `.env`; uses an Ollama stub on host port 11435), and fixtures
+- `tests`: cross-app integration, e2e (a Playwright browser test, `make e2e`: needs `S3_*` in `.env`; uses an Ollama stub on host port 11435), and fixtures
 - `docs`: architecture, API, development guide, ADRs, session summaries
 
 ## More
