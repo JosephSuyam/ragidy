@@ -331,6 +331,26 @@ def test_add_url_rate_limit_counts_every_attempt(
     assert count(db_engine, "documents") == 0
 
 
+def test_upload_rate_limit_counts_every_attempt(
+    db_override: GetDb, db_engine: Engine, fake_storage: Objects, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UPLOAD_PER_HOUR", "1")
+    with app_client(db_override) as client:
+        # Owner first: anonymous uploads key by IP, and the guest cookie re-keys later ones.
+        write(client)
+        assert upload(client, b"first").status_code == 202
+        stored = dict(fake_storage)
+
+        # Body never read: PNG sent as text/plain would be 415 if the body were read first.
+        limited = upload(client, PNG, "image.txt", "text/plain")
+
+    assert limited.status_code == 429, limited.text
+    assert limited.json()["code"] == "rate_limited"
+    assert 0 < int(limited.headers["retry-after"]) <= 3600
+    assert fake_storage == stored
+    assert count(db_engine, "documents") == 1
+
+
 def test_upload_without_file_field_422(
     client: TestClient, db_engine: Engine, fake_storage: Objects
 ) -> None:

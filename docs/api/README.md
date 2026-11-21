@@ -44,6 +44,7 @@ Add each new endpoint here: method, path, request, response, and error codes.
   - Register and login together: `RATE_LIMIT_AUTH_PER_MINUTE` per client IP key.
   - Login lockout: `LOGIN_MAX_FAILURES` attempts per email and client IP key in `LOGIN_FAILURE_WINDOW_MINUTES`. Each attempt counts until one succeeds, which clears that email and IP's count. Once locked, even the right password gets `429`.
   - URL fetches: `URL_FETCH_PER_HOUR` per owner, or per client IP key when the request has no owner yet. Every attempt counts, before the fetch, failed ones included.
+  - Uploads: `UPLOAD_PER_HOUR` per owner, or per client IP key when the request has no owner yet. A `409 document_limit_reached` does not count; every later attempt counts, before the body is read, including `400`, `413` and `415`.
   - Document retries: `DOCUMENT_RETRY_PER_HOUR` per owner. Every attempt by an owner counts, before the status check, so a `404` or `409` takes a slot too.
   - Chat messages: `CHAT_MESSAGES_PER_HOUR_<tier>` per owner. The count is taken after the chat lookup, so a `404` takes no slot, and before any LLM call.
 - `503 storage_unavailable`: the object store failed during `DELETE /documents/{id}`. Detail: `Storage is unavailable; try again later`. The document is intact; retry.
