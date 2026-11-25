@@ -18,3 +18,9 @@ Build order for the MVP in `docs/architecture/requirements.md` (R1-R14). Status 
 14. Testing and deployment: SeaweedFS hardening, done (internal ports on loopback, only S3 reachable); e2e, done (Playwright browser test: `make e2e`, CI `e2e` job, guest upload to cited chat answer to delete through the UI); Linux `extra_hosts` for Ollama, done; promote `develop` → `staging` → `main`, done (PRs #36, #37); production deploy waits on the `production` environment approval
 
 Notes: ChromaDB replaced by pgvector (ADR 0001); LangChain and LangGraph live only in `app/agents` (first code in step 10).
+
+## Future features (after the MVP)
+
+Not planned or scheduled.
+
+- Obsidian vault as a chat source: a user uploads a vault and chats with it. Open: how a vault arrives (`.zip` upload, single `.md` files, or a Git URL), and whether `[[wikilinks]]` are only cleaned to plain text or also followed during retrieval. A zip needs zip-bomb and path-traversal checks. The parser would live in `apps/api/app/rag/parsers`.
