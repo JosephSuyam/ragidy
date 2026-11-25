@@ -74,9 +74,11 @@ The hook logic is stdlib-only Python. `.claude/hooks/scripts/test_hooks.py` test
 | One concept and its neighbors | `graphify explain "<concept>"` |
 | What a change could break | `graphify affected "<symbol>"` |
 | Architectural hubs | `graphify god-nodes` |
+| Browse as an Obsidian vault | `graphify export obsidian` |
 
-- The rules for Claude are in the graphify section of `CLAUDE.md`. Delegation prompts (`orchestrator`, `feature-development`) pass them on to subagents.
+- The rules for Claude are in the graphify section of `CLAUDE.md`. Delegation prompts (`orchestrator`, `feature-development`) pass them on to subagents. `graphify claude install` rewrites that section from graphify's template, so after a rerun, restore the line saying `graphify-out/` is gitignored.
 - `graphify-out/` is gitignored. Each clone builds its own graph, so PRs carry no graph diffs.
+- To browse the graph in Obsidian, run `graphify update .` first. `graphify export obsidian` then writes `graphify-out/obsidian/` (gitignored) locally, with no LLM and no network. In Obsidian, use "Open folder as vault" on that folder. Re-exports skip unchanged notes and delete stale ones.
 - `graphify update .` indexes code only. `/graphify` adds docs and images through an LLM, so it sends file contents to that provider; run it only when that is acceptable.
 
 ## Self-annealing loop
